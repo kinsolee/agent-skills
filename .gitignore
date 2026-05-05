@@ -7,3 +7,4 @@ test-results/
 .browser-profile/
 .omc/
 .DS_Store
+.reauth-backup.txt
