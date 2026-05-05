@@ -1,0 +1,13 @@
+{
+  "name": "sub2api-auto-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "auth": "node src/authorize-openai-oauth.mjs"
+  },
+  "dependencies": {
+    "@askjo/camofox-browser": "^1.8.12",
+    "playwright": "^1.52.0"
+  }
+}

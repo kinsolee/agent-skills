@@ -1,0 +1,2 @@
+jane@example.com ---- MyPassword123* ---- Plus ---- tok_example
+john@example.com ---- AnotherPass456* ---- Plus ---- tok_example
