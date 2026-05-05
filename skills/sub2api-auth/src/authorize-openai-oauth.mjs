@@ -2,6 +2,7 @@
 
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
@@ -24,6 +25,32 @@ const DEFAULTS = {
   camofoxUrl: "http://localhost:9377",
   useCamofox: true
 };
+
+const BACKUP_FILE = ".reauth-backup.txt";
+
+function saveBackup(email, rawLine) {
+  try {
+    let existing = "";
+    try { existing = fsSync.readFileSync(BACKUP_FILE, "utf-8"); } catch {}
+    if (existing.includes(email)) return;
+    fsSync.appendFileSync(BACKUP_FILE, rawLine.trim() + "\n");
+    log(email, `credentials backed up to ${BACKUP_FILE}`);
+  } catch {}
+}
+
+function removeBackup(email) {
+  try {
+    let existing = "";
+    try { existing = fsSync.readFileSync(BACKUP_FILE, "utf-8"); } catch {}
+    if (!existing) return;
+    const lines = existing.split("\n").filter(l => l.trim() && !l.includes(email));
+    if (lines.length === 0) {
+      fsSync.unlinkSync(BACKUP_FILE);
+    } else {
+      fsSync.writeFileSync(BACKUP_FILE, lines.join("\n") + "\n");
+    }
+  } catch {}
+}
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help || args.h) {
@@ -136,9 +163,10 @@ try {
         const adminPage = await context.newPage();
         let keepAdminPageOpen = false;
         try {
-          const result = await addAccountFlow(adminPage, account, config);
+          const result = await reauthorizeAccountFlow(adminPage, account, config);
           summary.push(result);
           keepAdminPageOpen = config.keepOpenOnFail && !result.ok;
+          if (result.ok) removeBackup(account.email);
           logStep(account.email, result.ok ? `re-auth success: ${result.status || "normal"}` : `re-auth failed: ${result.reason}`);
         } catch (error) {
           summary.push({ email: account.email, ok: false, reason: errorMessage(error) });
@@ -159,6 +187,7 @@ try {
       const result = await addAccountFlow(adminPage, account, config);
       summary.push(result);
       keepAdminPageOpen = config.keepOpenOnFail && !result.ok;
+      if (result.ok) removeBackup(account.email);
       logStep(account.email, result.ok ? `success: ${result.status || "normal"}` : `failed: ${result.reason}`);
     } catch (error) {
       summary.push({ email: account.email, ok: false, reason: errorMessage(error) });
@@ -196,6 +225,7 @@ async function addAccountFlow(page, account, config) {
   const existing = await searchAndFindAccountRow(page, account.email);
   if (existing) {
     logStep(account.email, "account already exists, deleting and re-adding");
+    saveBackup(account.email, account.raw);
     await deleteExistingAccount(page, account);
     // Reload page to reflect deletion
     await page.goto(config.adminUrl, { waitUntil: "domcontentloaded" });
@@ -402,6 +432,183 @@ async function addAccountFlow(page, account, config) {
     return { email: account.email, ok: false, reason: `account found but status is ${status.status || "unknown"}` };
   }
 
+  return { email: account.email, ok: true, status: status.status || "正常" };
+}
+
+async function reauthorizeAccountFlow(page, account, config) {
+  // Re-authorize an existing account via "更多" → "重新授权" (no deletion needed)
+  await page.goto(config.adminUrl, { waitUntil: "domcontentloaded" });
+  await waitForSettled(page);
+  await ensureAdminPage(page, config);
+  await waitForPageContent(page);
+  await dismissGuides(page);
+  await closeOpenDialogs(page);
+
+  // Search for the account
+  const row = await searchAndFindAccountRow(page, account.email);
+  if (!row) {
+    return { email: account.email, ok: false, reason: "account not found in list" };
+  }
+
+  // Remove overlays
+  await page.evaluate(() => {
+    document.querySelectorAll('.driver-overlay, .driver-popover, [class*="driver-"]').forEach(el => el.remove());
+  }).catch(() => {});
+
+  // Click "更多" (More) dropdown button in the operations column
+  const moreBtn = row.locator('button:has-text("更多"), button:has-text("More")').first();
+  if ((await moreBtn.count()) === 0) {
+    return { email: account.email, ok: false, reason: "could not find '更多' button" };
+  }
+  await moreBtn.click({ force: true });
+  await sleep(1000);
+
+  // Click "重新授权" (Re-authorize) from the dropdown
+  const reauthBtn = page.locator('text=重新授权, text=Re-authorize, text=Reauthorize, [class*="dropdown"] >> text=重新授权').first();
+  const reauthClicked = await page.evaluate(() => {
+    const items = document.querySelectorAll('.el-dropdown-menu__item, .dropdown-item, [class*="dropdown"] li, [class*="popover"] *');
+    for (const item of items) {
+      const text = item.textContent?.trim();
+      if (text === '重新授权' || text === 'Re-authorize' || text === 'Reauthorize') {
+        item.click();
+        return text;
+      }
+    }
+    return null;
+  });
+  if (!reauthClicked) {
+    // Fallback: try playwright locator
+    const fallbackBtn = page.locator('.el-dropdown-menu__item:has-text("重新授权"), .dropdown-item:has-text("重新授权")').first();
+    if ((await fallbackBtn.count()) > 0) {
+      await fallbackBtn.click({ force: true });
+    } else {
+      return { email: account.email, ok: false, reason: "could not find '重新授权' option in dropdown" };
+    }
+  }
+  logStep(account.email, "clicked 重新授权 from dropdown");
+  await waitForSettled(page);
+  await sleep(2000);
+
+  // Wait for authorization dialog and generate auth link
+  let form = await activeDialog(page);
+  if (!form) {
+    return { email: account.email, ok: false, reason: "authorization dialog did not open" };
+  }
+
+  debugStep(config, "generating auth link for re-authorization");
+  await clickDialogButtonTextDom(page, ["生成授权链接", "Generate authorization link", "Generate Auth Link", "授权链接"], "generate auth link button", { exact: false });
+  await waitForSettled(page);
+  await debugAuthorizationState(page, config, "after auth link click");
+  let authUrl = await waitForAuthorizationUrl(page, 30000, config);
+  if (!authUrl) {
+    debugStep(config, "retrying auth link generation");
+    const retried = await clickDialogButtonTextDomIfPresent(
+      page,
+      ["重新生成", "生成授权链接", "Generate authorization link", "Generate Auth Link", "授权链接"],
+      { exact: false }
+    );
+    if (retried) {
+      await waitForSettled(page);
+      await debugAuthorizationState(page, config, "after auth link retry");
+      authUrl = await waitForAuthorizationUrl(page, 30000, config);
+    }
+  }
+  if (!authUrl) {
+    await debugAuthorizationState(page, config, "auth link not found");
+    throw new Error("Could not find generated authorization URL on the page.");
+  }
+
+  // OAuth flow (same as addAccountFlow from here)
+  const callbackServer = await startCallbackServerForAuthUrl(authUrl, config);
+  let callbackUrl = "";
+  try {
+    console.log("");
+    console.log(`[${account.email}] Authorization page opened.`);
+
+    if (config.useCamofox) {
+      const cfTab = await cfCreateTab(config.camofoxUrl, account.email, "openai-auth", authUrl);
+      const cfTabId = cfTab.tabId;
+      try {
+        console.log(`[${account.email}] Automating OpenAI login via camofox-browser...`);
+        const loginResult = await automateOpenAILoginCamofox(config.camofoxUrl, cfTabId, account, config, page.context());
+        if (loginResult && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/i.test(loginResult)) {
+          callbackUrl = loginResult;
+          console.log(`[${account.email}] Callback URL captured during login automation.`);
+        } else {
+          console.log(`[${account.email}] Waiting for the localhost callback URL...`);
+          callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
+        }
+      } catch (loginError) {
+        console.log(`[${account.email}] Login automation failed (${errorMessage(loginError)}). Please complete login manually.`);
+        callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
+      } finally {
+        await cfCloseTab(config.camofoxUrl, cfTabId, account.email).catch(() => {});
+      }
+    }
+  } finally {
+    await callbackServer?.close?.();
+  }
+
+  // Submit callback URL
+  await page.bringToFront();
+  form = await activeDialog(page);
+  logStep(account.email, `submitting callback URL: ${callbackUrl.slice(0, 100)}...`);
+  if (form) {
+    const dialogText = await form.evaluate(el => el.innerText?.slice(0, 800) || "").catch(() => "");
+    logStep(account.email, `dialog text before submit: ${dialogText.replace(/\s+/g, " ").slice(0, 400)}`);
+  }
+  await fillDialogControl(page, ["授权链接或 Code", "授权链接", "Code", "Authorization", "Callback"], callbackUrl);
+  logStep(account.email, `callback URL filled into dialog`);
+
+  const filledValue = await page.evaluate(() => {
+    const dialog = [...document.querySelectorAll('[role="dialog"], .modal-overlay, .modal')].find((n) => {
+      const r = n.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (!dialog) return "no dialog";
+    const inputs = [...dialog.querySelectorAll("input, textarea")].filter(n => !["radio", "checkbox", "hidden"].includes(n.type));
+    return inputs.map(n => `${n.placeholder || n.name || "unnamed"}="${n.value?.slice(0, 60)}"`).join("; ");
+  }).catch(() => "eval failed");
+  logStep(account.email, `dialog input values: ${filledValue}`);
+
+  await clickDialogText(page, ["完成授权", "Finish", "完成", "Submit", "Confirm"], "finish authorization button", { exact: false });
+  logStep(account.email, `finish authorization button clicked`);
+  await waitForSettled(page);
+  await sleep(3000);
+
+  const postSubmitText = await page.evaluate(() => document.body?.innerText?.slice(0, 3000) || "").catch(() => "");
+  logStep(account.email, `post-submit page text: ${postSubmitText.replace(/\s+/g, " ").slice(0, 800)}`);
+
+  try {
+    const postDialog = await activeDialog(page);
+    if (postDialog) {
+      const dialogText = await postDialog.evaluate(el => el.innerText?.slice(0, 500) || "").catch(() => "");
+      logStep(account.email, `dialog still open after submit: ${dialogText.replace(/\s+/g, " ").slice(0, 300)}`);
+    }
+  } catch {}
+
+  // Verify result
+  await page.goto(config.adminUrl, { waitUntil: "domcontentloaded" });
+  await waitForSettled(page);
+  await waitForPageContent(page);
+  await sleep(2000);
+
+  const searchInput = page.locator('input[placeholder*="搜索"], input[placeholder*="Search"], input[placeholder*="名称"]').first();
+  if ((await searchInput.count()) > 0) {
+    await searchInput.fill(account.email);
+    await sleep(1500);
+    await waitForSettled(page);
+  }
+
+  const status = await verifyAccountStatus(page, account.email);
+  logStep(account.email, `verify result: found=${status.found} normal=${status.normal} status=${status.status}`);
+
+  if (!status.found) {
+    return { email: account.email, ok: false, reason: "account not found after re-authorization" };
+  }
+  if (!status.normal) {
+    return { email: account.email, ok: false, reason: `account found but status is ${status.status || "unknown"}` };
+  }
   return { email: account.email, ok: true, status: status.status || "正常" };
 }
 
@@ -1640,7 +1847,7 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
   const codeInput = cfFindRef(snap.snapshot, { roleMatch: /textbox|input|edit/i });
   if (codeInput) {
     logStep(account.email, "verification code required, retrieving from email helper... (camofox)");
-    const code = await retrieveEmailCode(account.email, config, browserContext);
+    const code = await retrieveEmailCode(account, config, browserContext);
     if (code) {
       logStep(account.email, `retrieved verification code: ${code}`);
       await cfClickRef(baseUrl, tabId, account.email, codeInput.ref);
@@ -1948,7 +2155,7 @@ async function openAIHandleVerification(page, account, config, browserContext) {
   }
 
   logStep(account.email, "verification code required, retrieving from email helper...");
-  const code = await retrieveEmailCode(account.email, config, browserContext);
+  const code = await retrieveEmailCode(account, config, browserContext);
   if (!code) {
     logStep(account.email, "could not retrieve verification code, please enter manually");
     return;
@@ -1995,19 +2202,38 @@ async function openAIClickSubmit(page, fallbackTexts) {
   });
 }
 
-async function retrieveEmailCode(email, config, browserContext) {
+async function retrieveEmailCode(accountOrEmail, config, browserContext) {
+  const email = typeof accountOrEmail === "string" ? accountOrEmail : accountOrEmail.email;
+  const rawLine = typeof accountOrEmail === "string" ? email : (accountOrEmail.raw || email);
   const emailPage = await browserContext.newPage();
   try {
     await emailPage.goto("https://email.nloop.cc/", { waitUntil: "domcontentloaded", timeout: 15000 });
     await emailPage.waitForTimeout(3000);
 
-    const imported = await importEmailToHelper(emailPage, email);
+    const imported = await importEmailToHelper(emailPage, rawLine);
     if (!imported) {
       logStep(email, "could not find email import field on email helper page");
       return null;
     }
 
+    // Click "获取邮件" button to fetch emails
+    const fetchBtn = emailPage.locator('button, a, [role="button"]')
+      .filter({ hasText: /获取邮件|刷新|fetch|refresh|get.*mail/i }).first();
+    if (await fetchBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await fetchBtn.click();
+      logStep(email, "clicked 获取邮件 button on email helper");
+      await emailPage.waitForTimeout(5000);
+    }
+
     for (let attempt = 0; attempt < 15; attempt++) {
+      // Click 获取邮件 before each poll attempt to refresh
+      if (attempt > 0) {
+        const refreshBtn = emailPage.locator('button, a, [role="button"]')
+          .filter({ hasText: /获取邮件|刷新|fetch|refresh|get.*mail/i }).first();
+        if (await refreshBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await refreshBtn.click().catch(() => {});
+        }
+      }
       await emailPage.waitForTimeout(3000);
       const code = await emailPage.evaluate(() => {
         const text = document.body.innerText || document.body.textContent || "";
@@ -2031,7 +2257,7 @@ async function retrieveEmailCode(email, config, browserContext) {
   }
 }
 
-async function importEmailToHelper(emailPage, email) {
+async function importEmailToHelper(emailPage, accountRawLine) {
   const importBtn = emailPage.locator('button, a, [role="button"]')
     .filter({ hasText: /批量导入|bulk import|添加|add|import/i }).first();
   if (await importBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -2049,7 +2275,7 @@ async function importEmailToHelper(emailPage, email) {
     const input = emailPage.locator(sel).first();
     if (await input.isVisible({ timeout: 2000 }).catch(() => false)) {
       await input.click();
-      await input.fill(email);
+      await input.fill(accountRawLine);
       await emailPage.keyboard.press("Enter").catch(() => {});
       await emailPage.waitForTimeout(2000);
       return true;
@@ -2226,14 +2452,28 @@ async function getAccountRemark(page, email) {
   }
 
   const row = page.locator(`xpath=//*[contains(normalize-space(), "${email}")]/ancestor::tr[1]`);
-  if ((await row.count()) === 0) return null;
+  log(email, `getAccountRemark: search input found=${(await searchInput.count()) > 0}, row count=${await row.count()}`);
+  if ((await row.count()) === 0) {
+    log(email, `getAccountRemark: row not found, trying without search filter`);
+    // Clear search and try broader match
+    await searchInput.fill("").catch(() => {});
+    await sleep(1000);
+    const row2 = page.locator(`xpath=//*[contains(normalize-space(), "${email}")]/ancestor::tr[1]`);
+    log(email, `getAccountRemark: retry row count=${await row2.count()}`);
+    if ((await row2.count()) === 0) return null;
+    // Use row2 from now on
+    var editRow = row2.first();
+  } else {
+    var editRow = row.first();
+  }
 
   // Remove overlays and click "编辑" button in the row
   await page.evaluate(() => {
     document.querySelectorAll('.driver-overlay, .driver-popover, [class*="driver-"]').forEach(el => el.remove());
   }).catch(() => {});
 
-  const editBtn = row.first().locator('button:has-text("编辑")').first();
+  const editBtn = editRow.locator('button:has-text("编辑")').first();
+  log(email, `getAccountRemark: editBtn count=${await editBtn.count()}`);
   if ((await editBtn.count()) === 0) return null;
   await editBtn.click({ force: true });
   await sleep(1500);
@@ -2246,10 +2486,12 @@ async function getAccountRemark(page, email) {
     if (dialog) {
       // Find the remark/备注 input/textarea
       const remarkInput = dialog.locator(
-        `xpath=.//*[normalize-space()="备注" or normalize-space()="Remark" or normalize-space()="Notes" or normalize-space()="备注"]/following::*[self::input or self::textarea][1]`
+        `xpath=.//*[normalize-space()="备注" or normalize-space()="Remark" or normalize-space()="Notes"]/following::*[self::input or self::textarea][1]`
       ).first();
+      log(email, `getAccountRemark: remarkInput count=${await remarkInput.count()}`);
       if ((await remarkInput.count()) > 0) {
         remark = await remarkInput.inputValue().catch(() => "");
+        log(email, `getAccountRemark: remark from labeled input="${remark.slice(0, 100)}"`);
       }
       // If not found by label, try textarea/input with the raw line pattern
       if (!remark) {
@@ -2261,6 +2503,7 @@ async function getAccountRemark(page, email) {
           return "";
         });
         remark = allInputs;
+        log(email, `getAccountRemark: remark from fallback scan="${remark.slice(0, 100)}"`);
       }
     }
   } catch (e) {
