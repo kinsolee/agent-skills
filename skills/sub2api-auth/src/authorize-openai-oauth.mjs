@@ -319,6 +319,10 @@ async function addAccountFlow(page, account, config) {
           callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
         }
       } catch (loginError) {
+        if (/account_deactivated|account_suspended|account has been disabled/i.test(errorMessage(loginError))) {
+          await cfCloseTab(config.camofoxUrl, cfTabId, account.email).catch(() => {});
+          throw loginError;
+        }
         console.log(`[${account.email}] Login automation failed (${errorMessage(loginError)}). Please complete login manually.`);
         callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
       } finally {
@@ -539,6 +543,10 @@ async function reauthorizeAccountFlow(page, account, config) {
           callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
         }
       } catch (loginError) {
+        if (/account_deactivated|account_suspended|account has been disabled/i.test(errorMessage(loginError))) {
+          await cfCloseTab(config.camofoxUrl, cfTabId, account.email).catch(() => {});
+          throw loginError;
+        }
         console.log(`[${account.email}] Login automation failed (${errorMessage(loginError)}). Please complete login manually.`);
         callbackUrl = await waitForCamofoxCallback(config.camofoxUrl, cfTabId, callbackServer, config.perAccountTimeoutMs, account.email);
       } finally {
@@ -1876,6 +1884,15 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
   for (let attempt = 0; attempt < 5; attempt++) {
     snap = await cfGetSnapshot(baseUrl, tabId, account.email);
     debugStep(config, `camofox consent attempt ${attempt}: ${(snap.snapshot || "").slice(0, 800)}`);
+
+    // Detect error pages (account deactivated, suspended, etc.)
+    const errorPatterns = /account_deactivated|account_suspended|error occurred during authentication|account has been disabled|account.*banned|access.*denied/i;
+    if (errorPatterns.test(snap.snapshot || "") || errorPatterns.test(snap.url || "")) {
+      const errorMatch = (snap.snapshot || "").match(/(account_\w+|error occurred[^.]*)/i);
+      const errorMsg = errorMatch ? errorMatch[1] : "account error";
+      logStep(account.email, `OpenAI auth error detected: ${errorMsg}`);
+      throw new Error(`OpenAI auth failed: ${errorMsg}`);
+    }
 
     // Check if already redirected to callback
     if (snap.url && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/i.test(snap.url)) {
