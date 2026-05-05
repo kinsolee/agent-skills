@@ -16,6 +16,10 @@ It will:
 
 It intentionally does not automate OpenAI password entry, email-code retrieval, or verification-code handling.
 
+## Prerequisites
+
+- Node.js >= 18
+
 ## Setup
 
 ```bash
@@ -24,6 +28,15 @@ npx playwright install chromium
 cp .env.example .env
 cp accounts.example.txt accounts.txt
 ```
+
+### Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `playwright` | Automates the sub2api admin page (Chromium) |
+| `@askjo/camofox-browser` | Stealth Firefox REST API for OpenAI auth (bypasses Cloudflare) |
+
+The camofox-browser server starts automatically on port 9377 when the script runs. No manual setup needed — it's installed via `npm install`.
 
 Edit `.env` if your sub2api URL or group name is different. Put one account per line in `accounts.txt`:
 

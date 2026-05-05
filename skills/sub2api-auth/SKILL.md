@@ -23,6 +23,14 @@ tags:
 
 Automate the full lifecycle of OpenAI OAuth accounts in sub2api: batch authorization and revoked account re-authorization.
 
+## Prerequisites
+
+- Node.js >= 18
+- Run `npm install` to install dependencies (playwright, camofox-browser)
+- Run `npx playwright install chromium` for Playwright browser
+- camofox-browser server auto-starts on port 9377 if not already running
+- sub2api admin credentials (email/password)
+
 ## When to Use
 
 - User wants to add OpenAI OAuth accounts to sub2api admin panel
