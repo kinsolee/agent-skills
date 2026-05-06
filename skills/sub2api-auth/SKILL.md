@@ -83,6 +83,19 @@ node src/authorize-openai-oauth.mjs \
 - **Consent page**: Handles OpenAI consent/continue pages automatically
 - **Remark-based re-auth**: `--check-revoked` reads credentials from account's "备注" field
 
+### Automated Email Verification Code
+
+When OpenAI requires an email verification code during login, the script **automatically**:
+
+1. Detects the "Check your inbox" verification page
+2. Opens the email helper at `email.nloop.cc` in a new browser tab
+3. Pastes the full account line (email ---- password ---- plan ---- token) into the helper
+4. Clicks the "获取邮件" button to fetch emails
+5. Polls for the 6-digit verification code and fills it in
+6. Continues with the authorization flow
+
+**No manual intervention is needed.** Just run the script and wait for it to complete. The agent should NOT attempt to manually handle verification codes — the script handles everything internally.
+
 ### accounts.txt Format
 
 ```
