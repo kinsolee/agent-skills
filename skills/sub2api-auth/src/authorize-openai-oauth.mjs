@@ -136,6 +136,10 @@ try {
       }
 
       // Get credentials from "备注" field in edit dialog (no accounts.txt needed)
+      await scanPage.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      await waitForSettled(scanPage);
+      await dismissGuides(scanPage);
+      await closeOpenDialogs(scanPage);
       for (const r of revoked) {
         const remark = await getAccountRemark(scanPage, r.email);
         if (remark && remark.includes("----")) {
@@ -468,9 +472,20 @@ async function reauthorizeAccountFlow(page, account, config) {
   await sleep(1000);
 
   // Click "重新授权" (Re-authorize) from the dropdown
-  const reauthBtn = page.locator('text=重新授权, text=Re-authorize, text=Reauthorize, [class*="dropdown"] >> text=重新授权').first();
   const reauthClicked = await page.evaluate(() => {
-    const items = document.querySelectorAll('.el-dropdown-menu__item, .dropdown-item, [class*="dropdown"] li, [class*="popover"] *');
+    // Try .action-menu-content buttons first (current UI framework)
+    const container = document.querySelector('.action-menu-content');
+    if (container) {
+      for (const btn of container.querySelectorAll('button')) {
+        const text = btn.textContent?.trim();
+        if (text === '重新授权' || text === 'Re-authorize' || text === 'Reauthorize') {
+          btn.click();
+          return text;
+        }
+      }
+    }
+    // Fallback: try Element UI or generic dropdown items
+    const items = document.querySelectorAll('.el-dropdown-menu__item, .dropdown-item, [class*="dropdown"] li, [class*="popover"] *, li[role="menuitem"], [role="menuitem"]');
     for (const item of items) {
       const text = item.textContent?.trim();
       if (text === '重新授权' || text === 'Re-authorize' || text === 'Reauthorize') {
@@ -481,13 +496,7 @@ async function reauthorizeAccountFlow(page, account, config) {
     return null;
   });
   if (!reauthClicked) {
-    // Fallback: try playwright locator
-    const fallbackBtn = page.locator('.el-dropdown-menu__item:has-text("重新授权"), .dropdown-item:has-text("重新授权")').first();
-    if ((await fallbackBtn.count()) > 0) {
-      await fallbackBtn.click({ force: true });
-    } else {
-      return { email: account.email, ok: false, reason: "could not find '重新授权' option in dropdown" };
-    }
+    return { email: account.email, ok: false, reason: "could not find '重新授权' option in dropdown" };
   }
   logStep(account.email, "clicked 重新授权 from dropdown");
   await waitForSettled(page);
