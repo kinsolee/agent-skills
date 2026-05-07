@@ -126,7 +126,6 @@ if (config.useCamofox) {
 }
 
 const context = await chromium.launchPersistentContext(path.resolve(config.browserProfile), {
-  channel: "chrome",
   headless: config.headless,
   slowMo: config.slowMo,
   viewport: { width: 1440, height: 1000 }
@@ -319,7 +318,7 @@ async function addAccountFlow(page, account, config) {
   await debugDialog(form, config, "after next");
 
   debugStep(config, "generating auth link");
-  await clickDialogButtonTextDom(page, ["生成授权链接", "Generate authorization link", "Generate Auth Link", "授权链接"], "generate auth link button", { exact: false });
+  await clickDialogButtonTextDom(page, ["生成授权链接", "生成授权 URL", "Generate authorization link", "Generate Auth Link", "Generate Auth URL", "授权链接", "Auth URL"], "generate auth link button", { exact: false });
   await waitForSettled(page);
   await debugAuthorizationState(page, config, "after auth link click");
   let authUrl = await waitForAuthorizationUrl(page, 30000, config);
@@ -416,7 +415,7 @@ async function addAccountFlow(page, account, config) {
   }).catch(() => "eval failed");
   logStep(account.email, `dialog input values: ${filledValue}`);
 
-  await clickDialogText(page, ["完成授权", "Finish", "完成", "Submit", "Confirm"], "finish authorization button", { exact: false });
+  await clickDialogText(page, ["完成授权", "Complete Authorization", "Finish", "完成", "Submit", "Confirm"], "finish authorization button", { exact: false });
   logStep(account.email, `finish authorization button clicked`);
   await waitForSettled(page);
   await sleep(3000);
@@ -547,7 +546,7 @@ async function reauthorizeAccountFlow(page, account, config) {
   }
 
   debugStep(config, "generating auth link for re-authorization");
-  await clickDialogButtonTextDom(page, ["生成授权链接", "Generate authorization link", "Generate Auth Link", "授权链接"], "generate auth link button", { exact: false });
+  await clickDialogButtonTextDom(page, ["生成授权链接", "生成授权 URL", "Generate authorization link", "Generate Auth Link", "Generate Auth URL", "授权链接", "Auth URL"], "generate auth link button", { exact: false });
   await waitForSettled(page);
   await debugAuthorizationState(page, config, "after auth link click");
   let authUrl = await waitForAuthorizationUrl(page, 30000, config);
@@ -626,7 +625,7 @@ async function reauthorizeAccountFlow(page, account, config) {
   }).catch(() => "eval failed");
   logStep(account.email, `dialog input values: ${filledValue}`);
 
-  await clickDialogText(page, ["完成授权", "Finish", "完成", "Submit", "Confirm"], "finish authorization button", { exact: false });
+  await clickDialogText(page, ["完成授权", "Complete Authorization", "Finish", "完成", "Submit", "Confirm"], "finish authorization button", { exact: false });
   logStep(account.email, `finish authorization button clicked`);
   await waitForSettled(page);
   await sleep(3000);
@@ -841,7 +840,8 @@ async function fillDialogControl(page, labels, value) {
         for (const label of payload.labels) {
           const wanted = normalize(label);
           for (const node of controls) {
-            if (normalize(node.getAttribute("placeholder")) === wanted) return setValue(node);
+            const placeholder = normalize(node.getAttribute("placeholder"));
+            if (placeholder === wanted || (wanted.length >= 4 && placeholder.includes(wanted))) return setValue(node);
           }
         }
 
