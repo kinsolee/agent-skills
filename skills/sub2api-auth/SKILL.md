@@ -44,6 +44,7 @@ Automate the full lifecycle of OpenAI OAuth accounts in sub2api: batch authoriza
 |---------|---------|
 | `--accounts <file>` | Batch authorize from accounts file |
 | `--check-revoked` | Scan all accounts and re-authorize revoked ones |
+| custom `check_all_ban_status.mjs` | Read-only scan of current sub2api account list and ban.nloop token status; parse structured API `results[].status` |
 | `--one <line>` | Authorize a single account |
 
 ```bash
@@ -56,6 +57,9 @@ node src/authorize-openai-oauth.mjs \
 node src/authorize-openai-oauth.mjs \
   --check-revoked \
   --admin-email <email> --admin-password <password>
+
+# Check current account disabled/banned status only (no reauth)
+node check_all_ban_status.mjs
 
 # Single account
 node src/authorize-openai-oauth.mjs \
@@ -76,6 +80,7 @@ node src/authorize-openai-oauth.mjs \
 
 ## Implementation Details
 
+- Local WSL operational notes and session-specific pitfalls are captured in `references/local-wsl-operations.md`; consult it before adding accounts, checking ban status, or promising GitHub push.
 - **Duplicate handling**: If account exists, delete first then re-add with fresh OAuth
 - **Proxy selection**: Auto-selects a real proxy (skips "无代理"/"No Proxy")
 - **Virtual scrolling**: Uses search input to handle sub2api's virtual-scrolled list
@@ -135,8 +140,13 @@ Set via `.env` file or `--env <file>`: `SUB2API_ADMIN_EMAIL`, `SUB2API_ADMIN_PAS
 
 ## Common Mistakes
 
-- **"备注" field empty**: `--check-revoked` requires the remark field to contain the full account line (email ---- password ---- plan ---- token)
-- **Admin credentials missing**: Required for all operations; set via env or CLI args
+- **"备注" field empty**: `--check-revoked` requires the remark field to contain the full account line (email ---- password ---- plan ---- token). For read-only ban checks, an empty `notes` field means ban.nloop cannot validate the account unless a parseable `tok_...` token is available; DB `refresh_token`/`rt_...` is not accepted by ban.nloop.
+- **Admin credentials missing**: Required for all operations; set via env or CLI args. On this WSL setup, `/home/kinso/sub2api/docker-compose.yml` contains `ADMIN_EMAIL` / `ADMIN_PASSWORD` for the local container.
+- **sub2api login button timeout**: Newer Sub2API login page labels the submit button `Sign In` and the inputs use placeholders `Enter your email` / `Enter your password`; use `button[type="submit"]` if text-based click times out.
+- **Chrome not installed**: If Playwright errors with `Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome`, remove `channel: "chrome"` from `chromium.launchPersistentContext(...)` and run with bundled Chromium (`npx playwright install chromium`).
+- **Generate auth link button renamed**: Newer Sub2API shows `Generate Auth URL`; include it in the auth-link button text candidates, otherwise automation fails with `Could not find generate auth link button.`
+- **Banned/disabled wording**: In user-facing reports, distinguish `sub2api status` from `ban.nloop token-check status`. Never say an account is disabled/banned unless the matched structured ban.nloop API result for that account is `banned` or sub2api itself reports an error/disabled status. `unknown` means "not enough token evidence to check", not abnormal.
+- **Ban status false positive**: Do not classify ban.nloop output by broad keyword search around an email because the page includes summary text like `banned: 0, normal: 1`; parse the structured `/api/openai-ban/check` JSON and use each matched `results[].status` value.
 - **Browser profile locked**: Delete `.browser-profile/SingletonLock` before runs
 - **camofox not running**: Server auto-starts on port 9377; ensure the port is free
 
