@@ -83,6 +83,33 @@ node src/authorize-openai-oauth.mjs \
 - **Consent page**: Handles OpenAI consent/continue pages automatically
 - **Remark-based re-auth**: `--check-revoked` reads credentials from account's "备注" field
 
+### Remote infra-agent Camofox Requirements
+
+Remote infra-agent authorization depends on Camofox presenting a stable Mac/en-US browser fingerprint, not just using the correct proxy exit IP. On the remote Camofox systemd service, keep these environment variables set:
+
+```ini
+Environment=CAMOFOX_OS=macos
+Environment=CAMOFOX_LOCALE=en-US
+Environment=CAMOFOX_TIMEZONE=America/Los_Angeles
+Environment=CAMOFOX_LATITUDE=37.7749
+Environment=CAMOFOX_LONGITUDE=-122.4194
+Environment=CAMOFOX_GEOIP=0
+```
+
+Before debugging OAuth failures as proxy/IP problems, verify the actual Camofox page fingerprint:
+
+```json
+{
+  "userAgent": "...Macintosh...Firefox/135.0",
+  "language": "en-US",
+  "platform": "MacIntel",
+  "timezone": "America/Los_Angeles",
+  "webdriver": false
+}
+```
+
+If OpenAI returns `unknown_country` while the proxy exit IP matches local, inspect Camofox locale/timezone/platform/geoip first. The remote service only accepts `http`/`https` URLs for tab creation; use a real HTTPS URL such as `https://example.com/` for fingerprint self-checks, not `about:blank`.
+
 ### Automated Email Verification Code
 
 When OpenAI requires an email verification code during login, the script **automatically**:
