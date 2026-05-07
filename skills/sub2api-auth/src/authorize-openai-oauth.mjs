@@ -52,6 +52,28 @@ function removeBackup(email) {
   } catch {}
 }
 
+function timestampForFilename(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function bannedBackupFilePath(date = new Date()) {
+  return `.banned-accounts-backup-${timestampForFilename(date)}.txt`;
+}
+
+function saveBannedAccountBackup(account, backupFile) {
+  const line = account.raw?.trim();
+  if (!line) throw new Error("missing raw account line for banned backup");
+  let existing = "";
+  try { existing = fsSync.readFileSync(backupFile, "utf-8"); } catch {}
+  if (!existing.split("\n").some((existingLine) => existingLine.trim() === line)) {
+    fsSync.appendFileSync(backupFile, line + "\n");
+  }
+  const saved = fsSync.readFileSync(backupFile, "utf-8").split("\n").some((savedLine) => savedLine.trim() === line);
+  if (!saved) throw new Error(`backup verification failed for ${account.email}`);
+  log(account.email, `banned account backed up to ${backupFile}`);
+}
+
 const args = parseArgs(process.argv.slice(2));
 if (args.help || args.h) {
   printHelp();
@@ -162,15 +184,18 @@ try {
       log("no revoked accounts to re-authorize");
     } else {
       const banStatuses = await checkBanStatuses(context, accountsToReauth, config);
+      const bannedBackupFile = bannedBackupFilePath();
       const accountsAllowedToReauth = [];
       for (const account of accountsToReauth) {
         const banStatus = banStatuses.get(account.email);
-        if (banStatus?.status === "banned") {
-          summary.push({ email: account.email, ok: true, status: "skipped: banned by ban.nloop.cc" });
-          logStep(account.email, "skipping re-auth because ban.nloop.cc reports banned");
+        if (banStatus?.status === "banned" && banStatus?.source === "api") {
+          logStep(account.email, "ban.nloop.cc API reports banned; backing up and deleting account");
+          const deleteResult = await backupAndDeleteBannedAccount(context, account, config, bannedBackupFile);
+          summary.push(deleteResult);
+          logStep(account.email, deleteResult.ok ? `deleted banned account; backup: ${bannedBackupFile}` : `banned account deletion skipped/failed: ${deleteResult.reason}`);
         } else {
           accountsAllowedToReauth.push(account);
-          logStep(account.email, banStatus?.status === "normal" ? "ban.nloop.cc reports normal; will re-authorize" : "ban.nloop.cc status unknown; will re-authorize");
+          logStep(account.email, banStatus?.status === "normal" ? "ban.nloop.cc API reports normal; will re-authorize" : "ban.nloop.cc status unknown; will re-authorize");
         }
       }
 
@@ -1591,6 +1616,37 @@ async function clearSearchFilter(page) {
   }
 }
 
+async function backupAndDeleteBannedAccount(context, account, config, backupFile) {
+  try {
+    saveBannedAccountBackup(account, backupFile);
+  } catch (error) {
+    return { email: account.email, ok: false, reason: `backup failed; deletion skipped: ${errorMessage(error)}` };
+  }
+
+  const page = await context.newPage();
+  try {
+    await page.goto(config.adminUrl, { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await ensureAdminPage(page, config);
+    await waitForPageContent(page);
+    await dismissGuides(page);
+    await closeOpenDialogs(page);
+
+    const deleted = await deleteExistingAccount(page, account);
+    if (!deleted) return { email: account.email, ok: false, reason: "banned deletion failed: delete button/action not completed" };
+
+    await waitForSettled(page);
+    const row = await searchAndFindAccountRow(page, account.email);
+    if (row) return { email: account.email, ok: false, reason: "banned deletion verification failed: account still present" };
+
+    return { email: account.email, ok: true, status: `deleted: banned by ban.nloop.cc; backup: ${backupFile}` };
+  } catch (error) {
+    return { email: account.email, ok: false, reason: `banned deletion failed: ${errorMessage(error)}` };
+  } finally {
+    await safeClose(page);
+  }
+}
+
 async function deleteExistingAccount(page, account) {
   // Delete ALL matching rows (there may be duplicates)
   let deleted = false;
@@ -1823,7 +1879,9 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
 
   // Click Continue/submit
   const continueRef = cfFindRef(snap.snapshot, { role: "button", text: "continue" })
-    || cfFindRef(snap.snapshot, { role: "button", text: "next" });
+    || cfFindRef(snap.snapshot, { role: "button", text: "next" })
+    || cfFindRef(snap.snapshot, { role: "button", text: "继续" })
+    || cfFindRef(snap.snapshot, { role: "button", text: "繼續" });
   if (continueRef) {
     await cfClickRef(baseUrl, tabId, account.email, continueRef.ref);
   } else {
@@ -1836,7 +1894,7 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
   snap = await cfGetSnapshot(baseUrl, tabId, account.email);
   debugStep(config, `camofox after email: ${(snap.snapshot || "").slice(0, 500)}`);
 
-  const passwordLinkTexts = ["continue with password", "use password", "sign in with password", "使用密码继续", "使用密码登录", "enter your password"];
+  const passwordLinkTexts = ["continue with password", "use password", "sign in with password", "使用密码继续", "使用密码登录", "使用密碼繼續", "使用密碼登入", "enter your password", "輸入你的密碼", "输入你的密码"];
   for (const text of passwordLinkTexts) {
     const pwLink = cfFindRef(snap.snapshot, { text });
     if (pwLink) {
@@ -1861,7 +1919,11 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
     debugStep(config, `camofox after password: ${(snap.snapshot || "").slice(0, 500)}`);
     const submitRef = cfFindRef(snap.snapshot, { role: "button", text: "continue" })
       || cfFindRef(snap.snapshot, { role: "button", text: "log in" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "next" });
+      || cfFindRef(snap.snapshot, { role: "button", text: "next" })
+      || cfFindRef(snap.snapshot, { role: "button", text: "继续" })
+      || cfFindRef(snap.snapshot, { role: "button", text: "繼續" })
+      || cfFindRef(snap.snapshot, { role: "button", text: "登入" })
+      || cfFindRef(snap.snapshot, { role: "button", text: "登录" });
     if (submitRef) {
       await cfClickRef(baseUrl, tabId, account.email, submitRef.ref);
     } else {
@@ -2569,11 +2631,63 @@ async function getAccountRemark(page, email) {
   return remark || null;
 }
 
+function classifyBanStatus(value) {
+  const status = String(value || "").toLowerCase();
+  if (/^(banned|ban|disabled|suspended|deactivated)$/.test(status) || /封禁|已封|banned|disabled|suspended|deactivated/i.test(status)) return "banned";
+  if (/^(normal|ok|active|enabled|success)$/.test(status) || /正常|normal|ok|active|enabled|success/i.test(status)) return "normal";
+  return "unknown";
+}
+
+function emailsFromValue(value) {
+  return String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+}
+
+function parseBanApiResults(payload, accounts, apiUrl, httpStatus) {
+  const results = new Map();
+  if (!payload?.ok || !Array.isArray(payload.results)) return results;
+  const accountByEmail = new Map(accounts.map((account) => [account.email.toLowerCase(), account]));
+
+  for (const item of payload.results) {
+    const candidates = [item?.inputEmail, item?.mailbox, ...emailsFromValue(JSON.stringify(item))]
+      .filter(Boolean)
+      .map((email) => String(email).toLowerCase());
+    const email = candidates.find((candidate) => accountByEmail.has(candidate));
+    if (!email) continue;
+
+    let status = classifyBanStatus(item?.status);
+    if (status === "unknown") status = classifyBanStatus(JSON.stringify(item));
+    results.set(accountByEmail.get(email).email, {
+      email: accountByEmail.get(email).email,
+      status,
+      source: "api",
+      apiUrl,
+      httpStatus,
+      rawStatus: item?.status || ""
+    });
+  }
+  return results;
+}
+
 async function checkBanStatuses(context, accounts, config) {
   const results = new Map();
   if (!accounts.length) return results;
 
   const page = await context.newPage();
+  const apiPayloads = [];
+  const responseHandler = async (response) => {
+    try {
+      const url = response.url();
+      if (!url.includes("/api/openai-ban/check")) return;
+      const text = await response.text();
+      let payload = null;
+      try { payload = JSON.parse(text); } catch {}
+      apiPayloads.push({ url, status: response.status(), ok: response.ok(), payload, text: text.slice(0, 500) });
+    } catch (error) {
+      apiPayloads.push({ error: errorMessage(error) });
+    }
+  };
+
+  page.on("response", responseHandler);
   try {
     log(`checking ${accounts.length} revoked accounts with ban.nloop.cc...`);
     await page.goto("https://ban.nloop.cc/", { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -2586,49 +2700,37 @@ async function checkBanStatuses(context, accounts, config) {
     }
 
     await input.fill(accounts.map((account) => account.raw).join("\n"));
-    const startButton = page.locator('button:has-text("开始检测"), button:has-text("Start")').first();
+    const startButton = page.locator('button:has-text("开始检测"), button:has-text("Start"), button:has-text("Check")').first();
     if ((await startButton.count()) === 0) {
       log("warning: could not find ban.nloop.cc start button; proceeding with re-authorization");
       return results;
     }
 
-    const emails = accounts.map((account) => account.email);
+    const apiResponsePromise = page.waitForResponse((response) => response.url().includes("/api/openai-ban/check"), { timeout: 60000 }).catch(() => null);
     await startButton.click({ force: true });
-    await page.waitForFunction((expectedEmails) => {
-      const bodyText = document.body.innerText || "";
-      if (/检测完成|check complete|completed/i.test(bodyText)) return true;
-      return expectedEmails.every((email) => bodyText.toLowerCase().includes(email.toLowerCase()));
-    }, emails, { timeout: 60000 }).catch(() => {});
+    await apiResponsePromise;
     await sleep(1000);
 
-    const parsed = await page.evaluate((emails) => {
-      const bodyText = document.body.innerText || "";
-      const output = [];
-      for (const email of emails) {
-        const index = bodyText.toLowerCase().indexOf(email.toLowerCase());
-        if (index < 0) {
-          output.push({ email, status: "unknown", text: "" });
-          continue;
-        }
-        const text = bodyText.slice(Math.max(0, index - 120), index + email.length + 240);
-        if (/封禁|banned|ban/i.test(text)) {
-          output.push({ email, status: "banned", text });
-        } else if (/正常|normal|ok/i.test(text)) {
-          output.push({ email, status: "normal", text });
-        } else {
-          output.push({ email, status: "unknown", text });
-        }
-      }
-      return output;
-    }, emails);
+    for (const apiResponse of apiPayloads) {
+      if (!apiResponse.ok || !apiResponse.payload) continue;
+      const parsed = parseBanApiResults(apiResponse.payload, accounts, apiResponse.url, apiResponse.status);
+      for (const [email, item] of parsed.entries()) results.set(email, item);
+    }
 
-    for (const item of parsed) {
-      results.set(item.email, item);
-      log(`  ban check: ${item.email} => ${item.status}`);
+    if (!results.size) {
+      log("warning: no parseable ban.nloop.cc API results captured; proceeding with re-authorization");
+      return results;
+    }
+
+    for (const account of accounts) {
+      const item = results.get(account.email) || { email: account.email, status: "unknown", source: "api" };
+      results.set(account.email, item);
+      log(`  ban check: ${account.email} => ${item.status} via ${item.source}${item.apiUrl ? ` ${item.apiUrl}` : ""}`);
     }
   } catch (error) {
     log(`warning: ban.nloop.cc check failed (${errorMessage(error)}); proceeding with re-authorization`);
   } finally {
+    page.off("response", responseHandler);
     await safeClose(page);
   }
   return results;
@@ -2669,7 +2771,13 @@ async function scanAllAccountStatuses(page) {
     const rows = await page.evaluate(() => {
       const trs = document.querySelectorAll('table tbody tr, .el-table__body tr, .ant-table-tbody tr, [class*="table"] tbody tr');
       return Array.from(trs).map(tr => {
-        const text = (tr.innerText || '').trim();
+        const visibleText = tr.innerText || '';
+        const fullText = tr.textContent || '';
+        const attributeText = Array.from(tr.querySelectorAll('[title], [aria-label], [data-tooltip], [data-tip], [data-title]'))
+          .map(el => [el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('data-tip'), el.getAttribute('data-title')].filter(Boolean).join(' '))
+          .filter(Boolean)
+          .join(' ');
+        const text = [visibleText, fullText, attributeText].join(' ').replace(/\s+/g, ' ').trim();
         const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
         return emailMatch ? { email: emailMatch[0], rowText: text } : null;
       }).filter(Boolean);
