@@ -161,8 +161,21 @@ try {
     if (!accountsToReauth.length) {
       log("no revoked accounts to re-authorize");
     } else {
-      log(`re-authorizing ${accountsToReauth.length} revoked accounts...`);
+      const banStatuses = await checkBanStatuses(context, accountsToReauth, config);
+      const accountsAllowedToReauth = [];
       for (const account of accountsToReauth) {
+        const banStatus = banStatuses.get(account.email);
+        if (banStatus?.status === "banned") {
+          summary.push({ email: account.email, ok: true, status: "skipped: banned by ban.nloop.cc" });
+          logStep(account.email, "skipping re-auth because ban.nloop.cc reports banned");
+        } else {
+          accountsAllowedToReauth.push(account);
+          logStep(account.email, banStatus?.status === "normal" ? "ban.nloop.cc reports normal; will re-authorize" : "ban.nloop.cc status unknown; will re-authorize");
+        }
+      }
+
+      log(`re-authorizing ${accountsAllowedToReauth.length} non-banned revoked accounts...`);
+      for (const account of accountsAllowedToReauth) {
         logStep(account.email, "re-authorizing revoked account");
         const adminPage = await context.newPage();
         let keepAdminPageOpen = false;
@@ -2556,6 +2569,71 @@ async function getAccountRemark(page, email) {
   return remark || null;
 }
 
+async function checkBanStatuses(context, accounts, config) {
+  const results = new Map();
+  if (!accounts.length) return results;
+
+  const page = await context.newPage();
+  try {
+    log(`checking ${accounts.length} revoked accounts with ban.nloop.cc...`);
+    await page.goto("https://ban.nloop.cc/", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await waitForSettled(page);
+
+    const input = page.locator("textarea").first();
+    if ((await input.count()) === 0) {
+      log("warning: could not find ban.nloop.cc input textarea; proceeding with re-authorization");
+      return results;
+    }
+
+    await input.fill(accounts.map((account) => account.raw).join("\n"));
+    const startButton = page.locator('button:has-text("开始检测"), button:has-text("Start")').first();
+    if ((await startButton.count()) === 0) {
+      log("warning: could not find ban.nloop.cc start button; proceeding with re-authorization");
+      return results;
+    }
+
+    const emails = accounts.map((account) => account.email);
+    await startButton.click({ force: true });
+    await page.waitForFunction((expectedEmails) => {
+      const bodyText = document.body.innerText || "";
+      if (/检测完成|check complete|completed/i.test(bodyText)) return true;
+      return expectedEmails.every((email) => bodyText.toLowerCase().includes(email.toLowerCase()));
+    }, emails, { timeout: 60000 }).catch(() => {});
+    await sleep(1000);
+
+    const parsed = await page.evaluate((emails) => {
+      const bodyText = document.body.innerText || "";
+      const output = [];
+      for (const email of emails) {
+        const index = bodyText.toLowerCase().indexOf(email.toLowerCase());
+        if (index < 0) {
+          output.push({ email, status: "unknown", text: "" });
+          continue;
+        }
+        const text = bodyText.slice(Math.max(0, index - 120), index + email.length + 240);
+        if (/封禁|banned|ban/i.test(text)) {
+          output.push({ email, status: "banned", text });
+        } else if (/正常|normal|ok/i.test(text)) {
+          output.push({ email, status: "normal", text });
+        } else {
+          output.push({ email, status: "unknown", text });
+        }
+      }
+      return output;
+    }, emails);
+
+    for (const item of parsed) {
+      results.set(item.email, item);
+      log(`  ban check: ${item.email} => ${item.status}`);
+    }
+  } catch (error) {
+    log(`warning: ban.nloop.cc check failed (${errorMessage(error)}); proceeding with re-authorization`);
+  } finally {
+    await safeClose(page);
+  }
+  return results;
+}
+
 async function scanAllAccountStatuses(page) {
   // Scroll through the entire account list (handles virtual scrolling)
   // Returns array of { email, status, rowText }
@@ -2605,7 +2683,7 @@ async function scanAllAccountStatuses(page) {
           email: row.email,
           status: statusMatch?.[0] || "未知",
           rowText: row.rowText,
-          isRevoked: /Token revoked|401|token.*revok|revok.*token|异常|错误|Error|Failed/i.test(row.rowText)
+          isRevoked: /Token revoked\s*\(?401\)?|Token revoked|token.*revok|revok.*token/i.test(row.rowText)
         });
         newCount++;
       }
