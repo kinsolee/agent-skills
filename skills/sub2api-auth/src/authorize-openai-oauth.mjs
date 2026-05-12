@@ -1799,7 +1799,7 @@ async function cfEvaluate(baseUrl, tabId, userId, expression) {
   return await cfRequest(baseUrl, "POST", `/tabs/${tabId}/evaluate`, { userId, expression });
 }
 
-function cfFindRef(snapshot, { role, text, roleMatch = null }) {
+function cfFindRef(snapshot, { role, text, roleMatch = null, excludeText = null }) {
   if (!snapshot) return null;
   // Format: `- role "text" [eN]:` or `- role [eN]:`
   const regex = /-\s*(\w+)\s+"([^"]*)"\s+\[(e\d+)\]/g;
@@ -1808,6 +1808,7 @@ function cfFindRef(snapshot, { role, text, roleMatch = null }) {
     const elRole = match[1].toLowerCase();
     const elText = match[2];
     const elRef = match[3];
+    if (excludeText && excludeText.test(elText)) continue;
     if (roleMatch && roleMatch.test(elRole)) {
       if (!text || elText.toLowerCase().includes(text.toLowerCase())) {
         return { ref: elRef, role: elRole, text: elText };
@@ -1908,26 +1909,44 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
   logStep(account.email, "entering password (camofox)");
   if (account.password) {
     // Click password field via CSS selector to focus it, then type via keyboard mode
-    await cfClickSelector(baseUrl, tabId, account.email, 'input[type="password"]');
+    try {
+      await cfClickSelector(baseUrl, tabId, account.email, 'input[type="password"]');
+    } catch (e) {
+      logStep(account.email, "password field click failed, page may have auto-navigated (camofox)");
+    }
     await sleep(500);
-    await cfRequest(baseUrl, "POST", `/tabs/${tabId}/type`, {
-      userId: account.email, text: account.password, mode: "keyboard", delay: 20
-    });
-    await sleep(500);
+    try {
+      await cfRequest(baseUrl, "POST", `/tabs/${tabId}/type`, {
+        userId: account.email, text: account.password, mode: "keyboard", delay: 20
+      });
+    } catch (e) {
+      logStep(account.email, "password typing failed, page may have auto-navigated (camofox)");
+    }
+    await sleep(1500);
 
     snap = await cfGetSnapshot(baseUrl, tabId, account.email);
     debugStep(config, `camofox after password: ${(snap.snapshot || "").slice(0, 500)}`);
-    const submitRef = cfFindRef(snap.snapshot, { role: "button", text: "continue" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "log in" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "next" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "继续" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "繼續" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "登入" })
-      || cfFindRef(snap.snapshot, { role: "button", text: "登录" });
-    if (submitRef) {
-      await cfClickRef(baseUrl, tabId, account.email, submitRef.ref);
+    // Skip submit if page already auto-navigated to verification
+    const alreadyOnVerification = /verification|challenge|code|otp/i.test(snap.url || "");
+    if (!alreadyOnVerification) {
+      const submitRef = cfFindRef(snap.snapshot, { role: "button", text: "continue" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "log in" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "next" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "继续" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "繼續" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "登入" })
+        || cfFindRef(snap.snapshot, { role: "button", text: "登录" });
+      try {
+        if (submitRef) {
+          await cfClickRef(baseUrl, tabId, account.email, submitRef.ref);
+        } else {
+          await cfPress(baseUrl, tabId, account.email, "Enter");
+        }
+      } catch (e) {
+        logStep(account.email, "submit click failed, page may have auto-navigated (camofox)");
+      }
     } else {
-      await cfPress(baseUrl, tabId, account.email, "Enter");
+      logStep(account.email, "page already on verification, skipping submit (camofox)");
     }
   }
   await sleep(3000);
@@ -1936,15 +1955,26 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
   snap = await cfGetSnapshot(baseUrl, tabId, account.email);
   debugStep(config, `camofox after password: ${(snap.snapshot || "").slice(0, 500)}`);
 
-  const codeInput = cfFindRef(snap.snapshot, { roleMatch: /textbox|input|edit/i });
+  const codeInput = cfFindRef(snap.snapshot, { roleMatch: /textbox|input|edit/i, excludeText: /email/i });
   if (codeInput) {
     logStep(account.email, "verification code required, retrieving from email helper... (camofox)");
-    const code = await retrieveEmailCode(account, config, browserContext);
+    let code = null;
+    for (let retry = 0; retry < 3 && !code; retry++) {
+      if (retry > 0) {
+        logStep(account.email, `retrying email code retrieval (attempt ${retry + 1})... (camofox)`);
+        await sleep(5000);
+      }
+      code = await retrieveEmailCode(account, config, browserContext);
+    }
     if (code) {
       logStep(account.email, `retrieved verification code: ${code}`);
-      await cfClickRef(baseUrl, tabId, account.email, codeInput.ref);
+      // Re-snapshot to get fresh refs before interacting with the code input
+      const freshSnap = await cfGetSnapshot(baseUrl, tabId, account.email);
+      const freshCodeInput = cfFindRef(freshSnap.snapshot, { roleMatch: /textbox|input|edit/i, excludeText: /email/i });
+      const targetRef = freshCodeInput ? freshCodeInput.ref : codeInput.ref;
+      await cfClickRef(baseUrl, tabId, account.email, targetRef);
       await sleep(300);
-      await cfTypeRef(baseUrl, tabId, account.email, codeInput.ref, code);
+      await cfTypeRef(baseUrl, tabId, account.email, targetRef, code);
       await sleep(500);
 
       snap = await cfGetSnapshot(baseUrl, tabId, account.email);
@@ -1976,6 +2006,12 @@ async function automateOpenAILoginCamofox(baseUrl, tabId, account, config, brows
       const errorMsg = errorMatch ? errorMatch[1] : "account error";
       logStep(account.email, `OpenAI auth error detected: ${errorMsg}`);
       throw new Error(`OpenAI auth failed: ${errorMsg}`);
+    }
+
+    // Skip if still on verification page — not a consent page
+    if (/email-verification|verify|challenge/i.test(snap.url || "")) {
+      debugStep(config, `consent: still on verification page (${snap.url}), waiting`);
+      continue;
     }
 
     // Check if already redirected to callback
@@ -2312,6 +2348,9 @@ async function retrieveEmailCode(accountOrEmail, config, browserContext) {
     await emailPage.waitForTimeout(3000);
 
     const imported = await importEmailToHelper(emailPage, rawLine);
+    debugStep(config, `email helper import result: ${imported}, raw line: ${rawLine.slice(0, 80)}`);
+    const helperPageText = await emailPage.evaluate(() => (document.body.innerText || "").slice(0, 500));
+    debugStep(config, `email helper page after import: ${helperPageText.slice(0, 300)}`);
     if (!imported) {
       logStep(email, "could not find email import field on email helper page");
       return null;
@@ -2336,6 +2375,9 @@ async function retrieveEmailCode(accountOrEmail, config, browserContext) {
         }
       }
       await emailPage.waitForTimeout(3000);
+      // Debug: log email helper page content
+      const pageText = await emailPage.evaluate(() => (document.body.innerText || "").slice(0, 500));
+      debugStep(config, `email helper poll ${attempt}: ${pageText.slice(0, 300)}`);
       const code = await emailPage.evaluate(() => {
         const text = document.body.innerText || document.body.textContent || "";
         const patterns = [
