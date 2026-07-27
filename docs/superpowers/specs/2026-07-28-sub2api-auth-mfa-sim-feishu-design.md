@@ -1,8 +1,8 @@
-# sub2api-auth 扩展设计：MFA 取码 + 短信接码 + 飞书 Base 持久化
+# sub2api-auth 扩展设计：ego-browser 驱动 + MFA/短信/飞书 Base
 
 ## 1. 目标与范围
 
-在现有 `sub2api-auth` skill 基础上，补齐三个缺失能力：
+在现有 `sub2api-auth` skill 基础上，用 ego-browser + agent playbook 架构替代现有 Playwright 硬编码脚本，补齐三个缺失能力：
 
 1. **MFA 一次性密码自动获取** — 从接码/2FA 平台（如 `2fa.nloop.cc`）实时抓取当前有效的 6 位 TOTP 码，填入 OpenAI 登录验证页。
 2. **手机绑定 + 短信验证码自动获取** — 在 OpenAI 要求绑定手机号时，自动从 SIM 池选号、填入、触发发送，再从接码平台（如 `sms369.vip`）轮询短信验证码并回填。
@@ -13,57 +13,72 @@
 + **Provider 文档解析** — 用户丢截图或文本时，用双视觉模型交叉验证提取结构化信息，回显确认后写入飞书 Base。
 + **SIM 池复用管理** — 全局手机号池，跨订单复用，单号上限 3 次绑定，每次绑定后冷却 3 天，有效期 25–30 天过期作废，撞 recently-used 自动换号。
 + **重新授权** — 掉 OAuth 授权时，从飞书 Base 读取完整凭证，无需人工整理 accounts.txt。
++ **Self-healing** — 遇到未知 UI 时 agent 截图理解、尝试操作，实在搞不定才 handoff 给用户。成功处理的新 UI 模式记录到 references/ 供后续复用。
 
-不在范围内：sub2api 后台 UI 操作逻辑的重构（已验证可用，最小手术插入新调用）。
+不在范围内：sub2api 后台 ban 状态扫描（`check_all_ban_status.mjs` 保留为独立工具脚本）。
 
 ## 2. 架构概览
 
-采用**适配器模式 + 最小手术**（方案 C）。现有 `authorize-openai-oauth.mjs` 的 sub2api UI 操作和 OpenAI 登录主干不动，新增独立模块在关键节点插入调用。
+### 核心转变：从脚本驱动到 agent 驱动
+
+现有 `authorize-openai-oauth.mjs`（2905 行）的核心痛点是用硬编码 selector 猜测页面结构。每换一个 provider 或 OpenAI 改一次 UI，就得回来改代码。新架构用 ego-browser 的 `snapshotText()` / `captureScreenshot()` 让 agent 实时观察页面，用视觉模型理解当前状态，用推理决定下一步动作——不需要预先写任何 selector。
 
 ```mermaid
 graph TD
-    subgraph "现有脚本（最小手术）"
-        AUTH["authorize-openai-oauth.mjs<br/>sub2api UI + OpenAI 登录主干"]
+    subgraph "Agent（Codex）"
+        PB["SKILL.md Playbook<br/>步骤指引 + 判断规则"]
+        VM["视觉模型<br/>截图理解 + 双模型交叉验证"]
+        REASON["推理引擎<br/>SIM 选号 / 状态判断 / 错误恢复"]
     end
 
-    subgraph "新增适配器模块"
-        MFA["mfa-adapter.mjs<br/>MFA 平台取码"]
-        SMS["sms-adapter.mjs<br/>短信接码平台取码"]
-        STORE["feishu-store.mjs<br/>飞书 Base 读写"]
-        SIM["sim-pool.mjs<br/>SIM 池选号/冷却/复用"]
-        PARSE["provider-parser.mjs<br/>Provider 文档解析"]
+    subgraph "ego-browser"
+        EB["ego-browser nodejs heredoc<br/>snapshotText / click / fillInput<br/>captureScreenshot / js"]
     end
 
-    subgraph "外部系统"
-        FEISHU[("飞书 Base")]
-        MFA_PLATFORM["2fa.nloop.cc 等"]
-        SMS_PLATFORM["sms369.vip 等"]
-        OPENAI["OpenAI OAuth"]
-        SUB2API["sub2api 后台"]
+    subgraph "飞书 Base（lark-base skill）"
+        FB[("gpt_accounts 表<br/>sim_cards 表")]
     end
 
-    AUTH -->|"验证码环节"| MFA
-    AUTH -->|"手机绑定环节"| SMS
-    AUTH -->|"授权前后读写状态"| STORE
-    SMS -->|"选号/更新状态"| SIM
-    SIM --> STORE
-    MFA --> MFA_PLATFORM
-    SMS --> SMS_PLATFORM
-    STORE --> FEISHU
-    AUTH --> OPENAI
-    AUTH --> SUB2API
-    PARSE -->|"解析结果写入"| STORE
+    subgraph "外部页面"
+        S2["sub2api 后台"]
+        O["OpenAI OAuth 登录页"]
+        MFA_P["MFA 平台（2fa.nloop.cc 等）"]
+        SMS_P["接码平台（sms369.vip 等）"]
+        EMAIL_P["邮箱助手（email.nloop.cc）"]
+    end
+
+    PB -->|"指引每一步操作"| EB
+    VM -->|"理解截图/页面状态"| REASON
+    REASON -->|"决定下一步"| PB
+    EB -->|"操作浏览器"| S2
+    EB -->|"操作浏览器"| O
+    EB -->|"操作浏览器"| MFA_P
+    EB -->|"操作浏览器"| SMS_P
+    EB -->|"操作浏览器"| EMAIL_P
+    REASON -->|"读写数据"| FB
 ```
 
-### 手术点（现有脚本的修改位置）
+### 与现有架构的对比
 
-| 位置 | 现有行为 | 新增调用 |
-|------|----------|----------|
-| `openAIHandleVerification()` | 只去 email.nloop.cc 取邮箱验证码 | 先尝试 MFA adapter 取 TOTP 码；MFA 无结果再 fallback 到邮箱验证码 |
-| `openAIHandleConsent()` 之前 | 无手机绑定处理 | 插入 `handlePhoneBinding()` — 检测是否出现手机绑定页，若有则调 SMS adapter |
-| 脚本入口 `main()` | 从 accounts.txt 读凭证 | 新增 `--from-feishu` 模式：从飞书 Base 读待授权/待重授账号列表 |
-| `--check-revoked` 模式 | 从 sub2api 备注读凭证 | 改为从飞书 Base 读凭证 |
-| 授权成功/失败后 | 无持久化 | 调 feishu-store 更新账号状态 |
+| 维度 | 旧架构（Playwright 脚本） | 新架构（ego-browser + agent） |
+|------|--------------------------|-------------------------------|
+| UI 交互 | 硬编码 selector + 几十个 fallback | agent 看页面实时决定 |
+| 新 provider 适配 | 改代码加 selector | 不需要改代码，agent 现场理解 |
+| 未知 UI 处理 | 卡死或报错 | 截图理解 → 尝试 → handoff |
+| 运行方式 | `node src/xxx.mjs` 一键跑 | agent 按 playbook 逐步执行 heredoc |
+| 速度 | 快（纯脚本） | 较慢（每步有模型推理延迟） |
+| 维护成本 | 高（UI 一变就要改代码） | 低（playbook 是自然语言，适应性强） |
+| 浏览器隔离 | Playwright 独立 profile | ego-browser task space，复用用户登录态 |
+
+### 保留的现有组件
+
++ `check_all_ban_status.mjs` — 保留为独立工具脚本，用于只读 ban 状态扫描。可后续也迁移到 ego-browser，但不在本期范围。
++ `references/local-wsl-operations.md` — 保留 WSL 环境操作笔记，更新飞书 Base 配置部分。
+
+### 废弃的现有组件
+
++ `src/authorize-openai-oauth.mjs` — 其 OpenAI 登录 + 验证 + 手机绑定 + 回调逻辑被 playbook 替代。sub2api 后台操作也被 playbook 替代。整个文件不再作为主入口。
++ `accounts.txt` / `accounts.example.txt` — 凭证来源改为飞书 Base，不再需要文本文件。
 
 ## 3. 数据模型（飞书 Base）
 
@@ -106,108 +121,112 @@ YAGNI。同一家 provider 的共享信息（默认密码、MFA 平台地址）�
 
 ## 4. 组件设计
 
-### 4.1 MFA Adapter（mfa-adapter.mjs）
+### 4.1 SKILL.md Playbook（替代 authorize-openai-oauth.mjs）
 
-**职责**：给定邮箱和 MFA 平台 URL，返回当前有效的 6 位 TOTP 验证码。
+SKILL.md 不再是"调用脚本的说明文档"，而是 agent 的操作手册。它包含：
 
-**交互方式**（以 2fa.nloop.cc 为参考实现）：
++ **触发条件**：用户丢 GPT 账号包截图/文本、说"授权"、"重新授权"、"添加账号"等。
++ **Provider 解析流程**：收到截图后的双视觉模型交叉验证 + 结构化提取 + 回显确认 + 写入飞书 Base。
++ **新增授权 playbook**：逐步指引 agent 完成一个账号的完整授权流程。
++ **重新授权 playbook**：从飞书 Base 读 revoked 账号，复用新增授权流程。
++ **SIM 池选号规则**：选号优先级、冷却/过期/上限判断、换号重试逻辑。
++ **已知 UI 模式库**：references/known-ui-patterns.md 里记录已验证的页面操作序列，agent 遇到已知平台时直接套用，遇到未知平台时现场理解并追加记录。
 
-1. 用 Playwright 打开 MFA 平台 URL。
-2. 定位"粘贴邮箱"输入框（参考截图：右侧面板有 `@` 前缀的输入框），填入目标邮箱。
-3. 等待页面渲染验证码结果区域。
-4. 提取 6 位数字验证码（参考截图：大号字体显示如 `130476`，旁边有倒计时秒数）。
-5. 返回验证码字符串。
+Playbook 的每一步遵循统一的 observe-act-verify 循环：
 
-**容错**：
+1. **Observe**：`snapshotText()` 获取语义化页面结构，必要时 `captureScreenshot()` 截图给视觉模型理解。
+2. **Reason**：agent 根据页面内容判断当前处于流程的哪个阶段、下一步该做什么。
+3. **Act**：用 `click()`、`fillInput()`、`typeText()` 等操作页面。
+4. **Verify**：再次 observe，确认操作生效、页面进入预期状态。
 
-+ 如果页面显示"无结果"或邮箱未绑定 MFA，返回 null，调用方 fallback 到邮箱验证码。
-+ 如果验证码倒计时 < 5 秒，等待下一轮刷新后再取（避免取到即将过期的码）。
-+ 超时 30 秒未出现验证码则返回 null。
+### 4.2 ego-browser 使用方式
 
-**扩展性**：不同 MFA 平台的页面结构不同。adapter 内部用 `platformType` 参数路由到不同的提取逻辑。首期只实现 `nloop` 类型（2fa.nloop.cc），后续遇到新平台加新提取函数。
+每个账号的授权流程使用一个 ego-browser task space。流程结束后 `completeTaskSpace` 关闭。
 
-### 4.2 SMS Adapter（sms-adapter.mjs）
+**sub2api 后台操作**（登录、生成授权链接、填回调 URL）：agent 在 task space 里打开 sub2api 后台页面，用 snapshotText 观察 UI，用 click/fillInput 操作。sub2api 后台是标准 Web 表单，语义化 workflow 足够。
 
-**职责**：给定接码地址，轮询获取短信验证码。
+**OpenAI OAuth 登录页**：agent 打开授权链接，观察登录页，填邮箱密码，处理 Cloudflare challenge（如果出现），处理 MFA/邮箱验证码/手机绑定。OpenAI 页面可能有 Cloudflare 保护，ego-browser 复用用户登录态和真实浏览器指纹，比 Playwright + Camofox 更自然。
 
-**交互方式**：
+**MFA 平台**（如 2fa.nloop.cc）：agent 在新 tab 打开 MFA 平台，snapshotText 找到邮箱输入框，填入邮箱，等待验证码出现，提取 6 位码。
 
-1. 用 Playwright 打开接码地址 URL。
-2. 首次打开时 probe 页面内容：如果返回 JSON（Content-Type 含 `application/json`），标记 `sms_type=api`，后续用 fetch 轮询；如果返回 HTML，标记 `sms_type=网页`，后续用页面 DOM 轮询。
-3. 轮询逻辑：每 5 秒检查一次，最长等待 120 秒。
-4. 验证码提取：从页面文本或 JSON 响应中匹配 4–8 位数字验证码（OpenAI 短信验证码通常 6 位）。
-5. 返回验证码字符串。
+**接码平台**（如 sms369.vip）：agent 在新 tab 打开接码地址，snapshotText 或截图观察页面，轮询提取短信验证码。首次打开时 probe 判断是网页还是 API 响应。
 
-**容错**：
+**邮箱助手**（如 email.nloop.cc）：作为 MFA 的 fallback，当 MFA 平台取不到码时使用。
 
-+ 如果 120 秒内未收到验证码，返回 null。调用方（handlePhoneBinding）标记该手机号为 unavailable，从 SIM 池换号重试。
-+ 如果页面显示"无法向此号码发送验证码"或 "This phone number was recently used"，立即返回特定错误码 `PHONE_REJECTED`，不继续轮询。
+**多 tab 管理**：一个 task space 内可以同时开多个 tab——主 tab 跑 OpenAI 登录流程，辅助 tab 打开 MFA 平台或接码平台取码，取完切回主 tab 填码。
 
-### 4.3 Feishu Base Store（feishu-store.mjs）
+### 4.3 飞书 Base 读写（lark-base skill）
 
-**职责**：封装飞书 Base 的 CRUD 操作，对上层提供语义化接口。
+agent 通过 lark-base skill（lark-cli 命令）直接读写飞书 Base，不写自定义 wrapper 脚本。
 
-**接口**：
++ **写入**：解析完 provider 文档后，用 lark-cli 批量创建 gpt_accounts 和 sim_cards 记录。
++ **读取**：授权流程开始时，用 lark-cli 查询 sub2api_status=pending 或 revoked 的账号。
++ **更新**：授权成功/失败后，用 lark-cli 更新对应记录的状态字段。
++ **SIM 池查询**：选号时用 lark-cli 查询 status=available 且未过期且未冷却且 bind_count<3 的记录。
 
-```
-// 账号操作
-upsertAccount(record)          // 新增或更新一条 gpt_accounts 记录
-getAccount(email)              // 按邮箱查单条
-listAccounts(filter)           // 按条件查列表（如 sub2api_status=revoked）
-updateAccountStatus(email, status, extra)  // 更新状态 + 可选附加字段
+飞书 API 凭证（app_id/app_secret 或 user_access_token）通过环境变量或 lark-cli 已配置的认证传入。
 
-// SIM 操作
-upsertSimCard(record)          // 新增或更新一条 sim_cards 记录
-getSimCard(phoneNumber)        // 按号码查单条
-listAvailableSimCards()        // 查所有 status=available 且未过期且未冷却且 bind_count<3 的号
-updateSimAfterBind(phoneNumber, email)     // 绑定成功后更新 bind_count/last_bind_time/cooldown_until/bound_accounts
-markSimUnavailable(phoneNumber, reason)    // 标记不可用 + 冷却
-markSimExpired(phoneNumber)               // 标记过期
+**Base 初始化**：首次使用时，agent 用 lark-cli 创建多维表格和两张表，字段类型按第 3 节定义。app_token 和 table_id 记录到 .env 或 SKILL.md 的配置说明中。
 
-// 批量操作
-batchUpsertAccounts(records)   // 批量写入（解析完一批文档后一次性写入）
-batchUpsertSimCards(records)   // 批量写入
-```
+### 4.4 SIM 池选号逻辑（agent 推理）
 
-**实现**：使用飞书 OpenAPI（lark-cli 或直接 HTTP 调用）。需要 app_id/app_secret 或 user access token。凭证通过环境变量或 .env 文件传入，不硬编码。
+不需要单独的 sim-pool.mjs 脚本。选号逻辑足够简单，agent 在推理时直接执行：
 
-**Base 定位**：首次运行时通过配置指定 `app_token` 和两张表的 `table_id`。如果表不存在，提供 `--init-tables` 命令自动创建。
+1. 用 lark-cli 查询 sim_cards 表中 status=available 的记录。
+2. 过滤掉 valid_until 已过期的（标记为 expired）。
+3. 过滤掉 cooldown_until 还未到的。
+4. 过滤掉 bind_count >= 3 的（标记为 exhausted）。
+5. 排除本轮已试过的号码。
+6. 按 bind_count 升序排序，取第一个。
+7. 全部不满足则返回 null，账号标记 manual_required。
 
-### 4.4 SIM Pool Manager（sim-pool.mjs）
+绑定成功后更新：bind_count+1、last_bind_time=now、cooldown_until=now+3天、bound_accounts 追加邮箱。
 
-**职责**：封装选号逻辑，对上层只暴露 `pickPhone()` 和 `reportResult()`。
+撞 recently-used 时更新：status=unavailable、cooldown_until=now+1小时、notes 追加原因。
 
-**选号逻辑 `pickPhone(excludePhones)`**：
+### 4.5 Provider 文档解析（agent 交互流程）
 
-1. 从飞书 Base 查 `listAvailableSimCards()`。
-2. 排除 `excludePhones` 列表中的号码（本轮已经试过的）。
-3. 优先选 `bind_count` 最小的（均匀分配）。
-4. 如果全部不满足条件，返回 null。调用方将该账号标记为 `manual_required`。
-
-**结果回报 `reportResult(phoneNumber, email, success, errorCode)`**：
-
-+ 成功：调 `updateSimAfterBind(phoneNumber, email)`。
-+ `PHONE_REJECTED`：调 `markSimUnavailable(phoneNumber, "recently_used")`，cooldown 设为 1 小时。
-+ 其他失败：不改变 SIM 状态（可能是网络问题，下次还能用）。
-
-### 4.5 Provider Doc Parser（provider-parser.mjs）
-
-**职责**：将用户丢来的截图或文本解析为结构化数据。
-
-**这个模块不是脚本运行时调用的**——它是 Codex agent 在交互时使用的流程指引，写在 SKILL.md 里。agent 收到截图后：
+这不是运行时模块，而是 SKILL.md 里的交互指引。agent 收到截图后：
 
 1. 用两个视觉模型各读一遍截图中的密码、密钥、URL 等关键字符串。
 2. 两边一致则采用。不一致则找用户确认。
-3. 提取结构化数据：GPT 账号列表（邮箱 + 统一密码）、MFA 平台地址、手机号列表 + 接码地址。
-4. 回显给用户确认。
-5. 确认后调 `feishu-store.batchUpsertAccounts()` 和 `batchUpsertSimCards()` 写入飞书 Base。
+3. HTML 实体解码（`&#26;` → `&` 等）。
+4. 提取结构化数据：GPT 账号列表（邮箱 + 统一密码）、MFA 平台地址、手机号列表 + 接码地址。
+5. 回显给用户确认。
+6. 确认后用 lark-cli 批量写入飞书 Base。
 
-**解析规则**（从真实样本归纳）：
+解析规则（从真实样本归纳）：
 
 + GPT 账号包：卡密列表每行一个邮箱；密码在"使用说明"里的"登录密码默认：xxx"；MFA 地址在"MFA 接码地址：xxx"。
 + 手机卡包：卡密列表每行格式为 `手机号|接码地址` 或 `手机号----接码地址`（两种分隔符都认）。
-+ HTML 实体解码：`&#26;` 转为 `&`，`&#35;` 转为 `#` 等，解析后做 HTML entity decode。
-+ 一次可能含多个包：agent 逐包解析，合并写入。
++ 一次可能含多个包：逐包解析，合并写入。
+
+### 4.6 已知 UI 模式库（references/known-ui-patterns.md）
+
+agent 每次成功处理一个平台的 UI 后，将截图描述 + 操作序列追加到这个文件。下次遇到同一平台时直接套用已知模式，跳过"现场理解"步骤，加快速度。
+
+格式示例：
+
+```markdown
+## 2fa.nloop.cc — MFA 取码
+
+页面结构：左侧"添加 MFA 密钥"面板（不用管），右侧"验证码"面板。
+操作序列：
+1. snapshotText 找到右侧"粘贴邮箱"输入框（通常有 @ 前缀提示）
+2. fillInput 填入目标邮箱
+3. 等待 2-3 秒，再次 snapshotText
+4. 在结果区域找 6 位数字（大号字体显示，旁边有倒计时秒数）
+5. 如果倒计时 < 5 秒，等下一轮刷新再取
+
+## sms369.vip — 短信接码（网页模式）
+
+页面结构：打开 token URL 后显示短信列表。
+操作序列：
+1. openOrReuseTab 打开接码 URL
+2. snapshotText 查看页面内容
+3. 在文本中匹配 4-8 位数字验证码
+4. 如果没有，等 5 秒刷新页面重试，最长 120 秒
+```
 
 ## 5. 数据流
 
@@ -216,131 +235,150 @@ batchUpsertSimCards(records)   // 批量写入
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant A as Codex Agent
-    participant P as provider-parser
-    participant F as 飞书 Base
-    participant S as authorize 脚本
-    participant M as MFA Adapter
-    participant SM as SMS Adapter
-    participant SP as SIM Pool
-    participant O as OpenAI
+    participant A as Agent
+    participant VM as 视觉模型
+    participant EB as ego-browser
+    participant FB as 飞书 Base
     participant S2 as sub2api
+    participant O as OpenAI
+    participant MFA as MFA 平台
+    participant SMS as 接码平台
 
     U->>A: 丢截图/文本（GPT 账号包 + 手机卡包）
-    A->>P: 双视觉模型解析
-    P-->>A: 结构化数据
+    A->>VM: 双模型交叉验证解析
+    VM-->>A: 结构化数据
     A->>U: 回显确认
     U-->>A: 确认
-    A->>F: batchUpsertAccounts + batchUpsertSimCards
-    A->>S: 启动授权（--from-feishu --status pending）
+    A->>FB: lark-cli 批量写入 gpt_accounts + sim_cards
 
     loop 每个 pending 账号
-        S->>F: getAccount(email)
-        S->>S2: 登录后台 → 生成授权链接
-        S->>O: 打开授权链接 → 填邮箱密码
-        O-->>S: 要求 MFA 验证码
-        S->>M: getMfaCode(email, mfa_platform_url)
-        M-->>S: 6 位码
-        S->>O: 填入 MFA 码
-        O-->>S: 要求绑定手机号
-        S->>SP: pickPhone()
-        SP->>F: listAvailableSimCards()
-        F-->>SP: 可用号码列表
-        SP-->>S: 选中号码
-        S->>O: 填入手机号 → 点发送
-        S->>SM: getSmsCode(sms_url)
-        SM-->>S: 短信验证码
-        S->>O: 填入验证码
-        O-->>S: 授权成功 → 回调 URL
-        S->>S2: 填回回调 URL
-        S->>F: updateAccountStatus(email, "active")
-        S->>SP: reportResult(phone, email, true)
-        SP->>F: updateSimAfterBind(phone, email)
+        A->>FB: lark-cli 查询账号凭证
+        A->>EB: useOrCreateTaskSpace(账号邮箱)
+        A->>EB: openOrReuseTab(sub2api 后台)
+        A->>EB: snapshotText → 登录 → 生成授权链接
+        A->>EB: openOrReuseTab(授权链接)
+        A->>EB: snapshotText → 填邮箱 → 填密码
+
+        alt 需要 MFA 验证码
+            A->>EB: 新 tab 打开 MFA 平台
+            A->>EB: snapshotText → 填邮箱 → 提取 6 位码
+            A->>EB: 切回主 tab → fillInput 填码
+        end
+
+        alt 需要邮箱验证码（MFA fallback）
+            A->>EB: 新 tab 打开邮箱助手
+            A->>EB: snapshotText → 导入邮箱 → 提取验证码
+            A->>EB: 切回主 tab → fillInput 填码
+        end
+
+        alt 需要绑定手机号
+            A->>FB: lark-cli 查询可用 SIM 卡
+            A->>A: 推理选号
+            A->>EB: snapshotText → 填手机号 → 点发送
+            A->>EB: 新 tab 打开接码地址
+            A->>EB: snapshotText/截图 → 轮询提取验证码
+            A->>EB: 切回主 tab → fillInput 填码
+            A->>FB: lark-cli 更新 SIM 卡绑定记录
+        end
+
+        A->>EB: snapshotText → 处理 consent 页 → 获取回调 URL
+        A->>EB: 切回 sub2api tab → 填回调 URL
+        A->>FB: lark-cli 更新账号状态为 active
+        A->>EB: completeTaskSpace
     end
 
-    S-->>A: 汇总结果
-    A->>U: 报告成功/失败/manual_required
+    A->>U: 汇总结果
 ```
 
 ### 5.2 重新授权流程
 
 与新增授权相同，区别在于：
 
-+ 入口是 `--check-revoked` 或 `--reauth <email>`。
-+ 从飞书 Base 读 `sub2api_status=revoked` 的账号（或指定邮箱）。
-+ 凭证（密码、MFA 平台、绑定手机号）全部从飞书 Base 读，不再依赖 sub2api 备注或 accounts.txt。
++ 入口触发：用户说"重新授权"、"check revoked"，或 agent 主动扫描。
++ 从飞书 Base 查 sub2api_status=revoked 的账号（或用户指定邮箱）。
++ 凭证全部从飞书 Base 读，不依赖 sub2api 备注或 accounts.txt。
 + 如果原绑定手机号仍在冷却/过期/不可用，从 SIM 池重新选号。
 
-### 5.3 handlePhoneBinding() 详细流程
+### 5.3 手机绑定详细流程
 
-这是现有脚本中**完全新增**的函数，插入在 `openAIHandleVerification()` 之后、`openAIHandleConsent()` 之前：
+agent 在 observe 阶段判断当前页面是否出现手机绑定 UI。判断依据：snapshotText 或截图中出现 `phone number`、`Check your phone`、`Enter the verification code we just sent to`、`添加电话号码` 等关键词。
 
-1. 检测当前页面是否出现手机绑定 UI（关键词：`phone number`、`Check your phone`、`Enter the verification code we just sent to`、`添加电话号码`）。
-2. 如果没出现，直接返回（有些账号可能不需要重新绑手机）。
-3. 如果出现，从 SIM 池 `pickPhone()` 获取号码。
-4. 在手机号输入框填入号码（注意国际区号格式：OpenAI 通常要 `+1` 前缀或下拉选国家）。
-5. 点击"Continue"/"Send code" 按钮。
-6. 等待 3 秒后调 SMS adapter 轮询验证码。
-7. 如果 SMS adapter 返回 `PHONE_REJECTED`：标记该号不可用，回到步骤 3 换号重试（最多 3 次）。
-8. 如果 SMS adapter 返回验证码：填入验证码输入框，点击 Continue。
-9. 如果 3 次换号都失败：将账号标记为 `manual_required`，跳过。
+如果没出现，跳过（有些账号不需要重新绑手机）。
+
+如果出现：
+
+1. 从飞书 Base 查可用 SIM 卡，推理选号。
+2. snapshotText 找到手机号输入框，fillInput 填入号码。注意国际区号：观察页面是否有国家下拉框或 `+1` 前缀输入框，按实际 UI 处理。
+3. click 发送按钮（Continue / Send code）。
+4. 等 3 秒，在新 tab 打开接码地址，轮询验证码（每 5 秒 snapshotText 一次，最长 120 秒）。
+5. 如果接码页面显示"无法向此号码发送验证码"或 "This phone number was recently used"：标记该号 unavailable + 1 小时冷却，换号重试（最多 3 次）。
+6. 如果拿到验证码：切回主 tab，fillInput 填入，click Continue。
+7. 3 次换号都失败：账号标记 manual_required，completeTaskSpace，跳过。
 
 ## 6. 错误处理
 
 | 场景 | 处理方式 |
 |------|----------|
-| MFA 平台打不开/超时 | 返回 null，fallback 到邮箱验证码；邮箱验证码也没有则标记 `manual_required` |
-| MFA 平台显示邮箱未绑定 | 返回 null，同上 fallback |
-| 短信接码平台打不开 | 标记该 SIM 卡 `unavailable`，换号重试 |
-| 手机号被 OpenAI 拒绝（recently used） | 标记该 SIM 卡 `unavailable` + 1 小时冷却，换号重试 |
-| SIM 池无可用号码 | 账号标记 `manual_required`，汇总报告 |
-| 飞书 Base API 限流/断网 | 脚本直接报错退出（不做本地缓存，断网本身就完不成授权） |
-| OpenAI 登录页出现未知 UI | 截图保存 + 标记 `manual_required`，不卡死流程 |
-| 密码错误（登录失败） | 标记 `failed`，记录错误信息到 notes |
+| MFA 平台打不开/超时 | agent 截图记录，fallback 到邮箱验证码；邮箱也没有则标记 manual_required |
+| MFA 平台显示邮箱未绑定 | 同上 fallback |
+| 接码平台打不开 | 标记该 SIM 卡 unavailable，换号重试 |
+| 手机号被 OpenAI 拒绝 | 标记 unavailable + 1 小时冷却，换号重试 |
+| SIM 池无可用号码 | 账号标记 manual_required，汇总报告 |
+| 飞书 Base API 限流/断网 | agent 报错告知用户（不做本地缓存） |
+| OpenAI 登录页出现未知 UI | agent 截图理解 → 尝试操作 → 搞不定则 handoff 给用户 |
+| 密码错误 | 标记 failed，notes 记录错误信息 |
+| Cloudflare challenge | ego-browser 复用真实浏览器指纹，通常自动通过；卡住则 handoff |
+| ego-browser "user is controlling" | 停止操作，等用户确认 continue 后 takeOverTaskSpace |
 
 ## 7. 安全与凭证处理
 
-+ 密码、接码 token、MFA 平台地址均以明文存飞书 Base。这些是消耗品账号的凭证，用户已确认接受云端存储风险。
-+ 飞书 API 凭证（app_id/app_secret 或 user_access_token）通过 `.env` 文件传入，`.env` 在 `.gitignore` 中。
-+ 脚本日志中密码和 token 做 redact（现有 `redactRaw()` 函数已处理 `tok_` 和 `----` 之间的密码，需扩展覆盖接码 URL 中的 token 参数）。
++ 密码、接码 token、MFA 平台地址均以明文存飞书 Base。消耗品账号凭证，用户已确认接受云端存储风险。
++ 飞书 API 凭证通过 lark-cli 已配置的认证或 .env 文件传入。
++ agent 在 commentary/final 输出中对密码和 token 做 redact。
 + sub2api 备注字段不再存任何凭证信息。
++ ego-browser task space 隔离：agent 操作不影响用户正常浏览。
 
 ## 8. 测试策略
 
 按 AGENTS.md 原则，业务 payload 必须来自真实数据，不编造。
 
-+ **单元测试**：SIM 池选号逻辑（mock 飞书 Base 返回，验证选号优先级、冷却排除、上限排除）、HTML 实体解码、账号行解析（用脱敏真实样本）。
-+ **适配器集成测试**：MFA adapter 和 SMS adapter 用 Playwright 对真实平台做 smoke test（需要网络，标记为 `@live`，CI 中跳过）。
-+ **端到端测试**：用一个真实 pending 账号跑完整流程，验证飞书 Base 状态更新正确。需要用户授权执行。
-+ **回归**：现有 `--accounts` 和 `--check-revoked` 流程在修改后仍需通过（用现有 accounts.txt 样本跑 dry-run 或真实跑）。
++ **Playbook 验证**：用一个真实 pending 账号跑完整新增授权流程，验证 playbook 每一步的 observe-act-verify 循环正确。需要用户授权执行。
++ **Provider 解析验证**：用本次用户提供的两张截图作为测试样本，验证双视觉模型解析 + 回显确认流程。
++ **SIM 池选号验证**：在飞书 Base 中构造几种状态组合（available + cooldown + expired + exhausted），验证 agent 推理选号逻辑正确。
++ **回归**：`check_all_ban_status.mjs` 在修改后仍需正常工作。
++ **已知 UI 模式积累**：每次成功处理后更新 known-ui-patterns.md，逐步覆盖所有遇到的平台。
 
 ## 9. 文件结构变更
 
 ```
 skills/sub2api-auth/
-├── SKILL.md                          # 更新：新增 provider 解析流程、飞书 Base 配置说明
-├── src/
-│   ├── authorize-openai-oauth.mjs    # 最小手术：插入适配器调用
-│   ├── mfa-adapter.mjs              # 新增
-│   ├── sms-adapter.mjs              # 新增
-│   ├── feishu-store.mjs             # 新增
-│   └── sim-pool.mjs                 # 新增
+├── SKILL.md                              # 重写：agent playbook + 触发条件 + 配置说明
 ├── references/
-│   └── local-wsl-operations.md      # 更新：飞书 Base 配置
-├── .env.example                      # 更新：新增飞书凭证变量
-└── package.json                      # 更新：新增飞书 SDK 依赖（如需要）
+│   ├── known-ui-patterns.md             # 新增：已知平台 UI 操作模式库
+│   ├── local-wsl-operations.md          # 保留更新：飞书 Base 配置
+│   └── provider-parse-rules.md          # 新增：provider 文档解析规则（从真实样本归纳）
+├── check_all_ban_status.mjs             # 保留：独立 ban 状态扫描工具
+├── .env.example                          # 更新：飞书凭证变量
+├── package.json                          # 可精简：不再需要 playwright 依赖（ego-browser 自带浏览器）
+└── src/
+    └── authorize-openai-oauth.mjs       # 废弃：不再作为主入口，保留供参考
 ```
 
-## 10. 环境变量新增
+## 10. 环境变量
 
 ```
-# 飞书 Base 配置
+# 飞书 Base 配置（如果 lark-cli 未配置认证）
 FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=xxxx
-FEISHU_BASE_APP_TOKEN=xxxx          # 多维表格的 app_token
-FEISHU_TABLE_GPT_ACCOUNTS=tblXxx    # gpt_accounts 表的 table_id
-FEISHU_TABLE_SIM_CARDS=tblYyy       # sim_cards 表的 table_id
+FEISHU_BASE_APP_TOKEN=xxxx
+FEISHU_TABLE_GPT_ACCOUNTS=tblXxx
+FEISHU_TABLE_SIM_CARDS=tblYyy
+
+# sub2api 后台（agent 通过 ego-browser 操作，但仍需知道 URL）
+SUB2API_ADMIN_URL=http://<ego-browser-host>:8080/admin/accounts
 ```
+
+不再需要：`SUB2API_ADMIN_EMAIL`、`SUB2API_ADMIN_PASSWORD`（agent 通过 ego-browser 登录 sub2api，可以复用用户登录态或首次 handoff 让用户登录）、Playwright 相关变量、Camofox 相关变量。
 
 ## 11. 双视觉模型交叉验证规则
 
@@ -349,10 +387,12 @@ FEISHU_TABLE_SIM_CARDS=tblYyy       # sim_cards 表的 table_id
 1. 每次解析截图中的密码、密钥、URL、token 等关键字符串时，必须用两个视觉模型各读一遍。
 2. 两边结果完全一致则采用。
 3. 两边不一致则停下来找用户确认，不得自行选择。
-4. 解析完成后，将结构化结果（邮箱列表、密码、MFA 地址、手机号列表、接码地址）原样回显给用户，等用户确认后再写入飞书 Base 和执行授权。
+4. 解析完成后，将结构化结果原样回显给用户，等用户确认后再写入飞书 Base 和执行授权。
 
 ## 12. 开放问题（实现时决定）
 
 + 飞书 Base 的 `bound_accounts` 字段用文本逗号分隔还是飞书关联字段？实现时看 lark-base API 对关联字段的支持程度决定。
-+ SMS adapter 的 API 模式具体 JSON 结构？实现时先对 `sms369.vip/api/sms/access?token=...` 做一次 probe，记录真实响应结构再写解析逻辑。
-+ OpenAI 手机绑定页的国际区号输入方式？实现时用 Playwright 截图确认 UI 结构再写选择器。
++ SMS 接码平台的 API 模式具体 JSON 结构？实现时先对真实 URL 做一次 probe，记录响应结构再写进 known-ui-patterns.md。
++ OpenAI 手机绑定页的国际区号输入方式？实现时用 ego-browser snapshotText/截图确认 UI 结构，记录到 known-ui-patterns.md。
++ ego-browser 能否自动通过 OpenAI 的 Cloudflare challenge？实现时实测，如果不能则 handoff 让用户手动过 challenge 后 agent 接管。
++ sub2api 后台登录是否需要每次 handoff 让用户登录？如果 ego-browser 能复用用户登录态则不需要；如果不能，首次 handoff 登录后后续复用 task space 或 cookie。
