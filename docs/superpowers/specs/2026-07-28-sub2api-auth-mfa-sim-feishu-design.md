@@ -375,7 +375,7 @@ FEISHU_TABLE_GPT_ACCOUNTS=tblXxx
 FEISHU_TABLE_SIM_CARDS=tblYyy
 
 # sub2api 后台（agent 通过 ego-browser 操作，但仍需知道 URL）
-SUB2API_ADMIN_URL=http://<ego-browser-host>:8080/admin/accounts
+SUB2API_ADMIN_URL=http://<sub2api-host>:8080/admin/accounts
 ```
 
 不再需要：`SUB2API_ADMIN_EMAIL`、`SUB2API_ADMIN_PASSWORD`（agent 通过 ego-browser 登录 sub2api，可以复用用户登录态或首次 handoff 让用户登录）、Playwright 相关变量、Camofox 相关变量。
