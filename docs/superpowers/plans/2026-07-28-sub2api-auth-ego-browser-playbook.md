@@ -19,6 +19,7 @@
 - Feishu Base is the single source of truth; no local credential cache.
 - sub2api remark field is left empty; no credentials stored there.
 - HTML entity decoding required on all parsed strings from provider docs.
+- UI patterns must carry provenance and one of these evidence states: `screenshot_inferred`, `snapshot_verified`, or `live_verified`. Never present inferred behavior as live verified.
 
 ---
 
@@ -28,7 +29,7 @@
 |------|--------|----------------|
 | `skills/sub2api-auth/SKILL.md` | Rewrite | Agent playbook: triggers, provider parsing flow, auth playbook, reauth playbook, SIM rules, config |
 | `skills/sub2api-auth/references/provider-parse-rules.md` | Create | Parsing rules for GPT account packs and SIM card packs, derived from real samples |
-| `skills/sub2api-auth/references/known-ui-patterns.md` | Create | Known platform UI operation sequences, seeded from screenshots, grows with each successful run |
+| `skills/sub2api-auth/references/known-ui-patterns.md` | Create | Provenance-tagged UI hypotheses and verified operation sequences; grows with each successful run |
 | `skills/sub2api-auth/.env.example` | Modify | Add Feishu Base env vars, remove Playwright/Camofox vars |
 | `skills/sub2api-auth/package.json` | Modify | Remove playwright and camofox-browser dependencies |
 | `skills/sub2api-auth/src/authorize-openai-oauth.mjs` | Keep as-is | Deprecated reference only; no modifications |
@@ -108,22 +109,18 @@ FEISHU_TABLE_GPT_ACCOUNTS=<GPT_TABLE_ID>
 FEISHU_TABLE_SIM_CARDS=<SIM_TABLE_ID>
 ```
 
-- [ ] **Step 5: Commit .env.example update (Task 5 will finalize, but record placeholder now)**
+- [ ] **Step 5: Verify Base and table readback without synthetic business records**
 
-No commit yet — .env.example update happens in Task 5. Just confirm the .env values work by running a test record write:
+Do not create a fake account such as `test@example.com`. Verify the remote resources using metadata and empty-list reads only:
 
 ```bash
-lark-cli base +record-batch-create --base-token "<BASE_TOKEN>" --table-id "<GPT_TABLE_ID>" --records '[{"fields":{"email":"test@example.com","password":"test","sub2api_status":"pending"}}]' --as user
-```
-
-Then delete the test record:
-```bash
+lark-cli base +base-get --base-token "<BASE_TOKEN>" --as user
+lark-cli base +table-list --base-token "<BASE_TOKEN>" --as user
 lark-cli base +record-list --base-token "<BASE_TOKEN>" --table-id "<GPT_TABLE_ID>" --as user
-# Note the record_id, then:
-lark-cli base +record-delete --base-token "<BASE_TOKEN>" --table-id "<GPT_TABLE_ID>" --record-id "<RECORD_ID>" --as user
+lark-cli base +record-list --base-token "<BASE_TOKEN>" --table-id "<SIM_TABLE_ID>" --as user
 ```
 
-Expected: Record created and deleted successfully. Feishu Base is operational.
+Expected: Base metadata and both real table IDs read back successfully. Records may be empty. Record CRUD is verified later with confirmed real provider snapshots in Task 6.
 
 ---
 
@@ -254,9 +251,17 @@ Create `skills/sub2api-auth/references/known-ui-patterns.md`:
 ```markdown
 # Known UI Patterns
 
-Operation sequences for platforms the agent has successfully interacted with. Check here before doing live observation — if a pattern matches, use it directly for speed. If the page doesn't match, do live observe-act-verify and append the new pattern here after success.
+This file contains both hypotheses and verified operation sequences. Every pattern must include:
+
+- `evidence_status`: `screenshot_inferred`, `snapshot_verified`, or `live_verified`
+- `source`: the screenshot, live page, or historical run that supports it
+- `as_of`: exact capture or verification date when known
+
+`screenshot_inferred` is a hypothesis only: observe the live page before acting. `snapshot_verified` means the current page structure was observed but the full operation was not completed. Only `live_verified` means the complete operation and readback succeeded.
 
 ## sub2api Admin — Login
+
+Evidence: `live_verified` from historical sub2api automation and operations notes; host changed to `<sub2api-host>`, so take a fresh snapshot before the first current run.
 
 Page: `SUB2API_ADMIN_URL` (default `http://<sub2api-host>:8080/admin/accounts`)
 
@@ -270,6 +275,8 @@ Page: `SUB2API_ADMIN_URL` (default `http://<sub2api-host>:8080/admin/accounts`)
 Note: ego-browser may inherit user's login session. If already logged in, skip to step 6.
 
 ## sub2api Admin — Generate Auth URL
+
+Evidence: `live_verified` from historical sub2api automation; refresh `as_of` after the first current run.
 
 Prerequisite: logged in, on accounts page.
 
@@ -286,6 +293,8 @@ Prerequisite: logged in, on accounts page.
 
 ## sub2api Admin — Fill Callback URL
 
+Evidence: `live_verified` from historical sub2api automation; refresh `as_of` after the first current run.
+
 Prerequisite: account dialog still open, callback URL obtained from OpenAI flow.
 
 1. `snapshotText()` — look for input field labeled "授权链接" or "Code" or "Authorization URL" or "Callback"
@@ -294,6 +303,8 @@ Prerequisite: account dialog still open, callback URL obtained from OpenAI flow.
 4. `snapshotText()` — verify account status changed or dialog closed
 
 ## OpenAI OAuth — Login Page
+
+Evidence: `live_verified` from historical OpenAI OAuth runs; always re-observe because OpenAI UI changes frequently.
 
 Page: authorization URL from sub2api.
 
@@ -313,6 +324,8 @@ Page: authorization URL from sub2api.
 
 ## OpenAI OAuth — MFA Verification (2fa.nloop.cc)
 
+Evidence: `screenshot_inferred` from user-provided provider instructions on 2026-07-28. Not yet live verified.
+
 Triggered when: snapshotText shows a code input field (`input[name="code"]`, `input[autocomplete="one-time-code"]`, or 6 separate digit inputs) AND the account record has `mfa_platform_url`.
 
 1. Open MFA platform in new tab: `openOrReuseTab(mfaPlatformUrl)`
@@ -330,6 +343,8 @@ Fallback: If MFA platform returns no result for this email, try email helper (em
 
 ## OpenAI OAuth — Phone Binding
 
+Evidence: `screenshot_inferred` from user-provided provider instructions on 2026-07-28. Not yet live verified.
+
 Triggered when: snapshotText or screenshot shows "phone number", "Check your phone", "Enter the verification code we just sent to", "添加电话号码", or a phone number input field.
 
 1. Query Feishu Base for available SIM cards (lark-cli)
@@ -345,11 +360,13 @@ Triggered when: snapshotText or screenshot shows "phone number", "Check your pho
    b. Look for 4-8 digit verification code in page text
    c. If page shows "无法向此号码发送验证码" or "This phone number was recently used" → return PHONE_REJECTED
    d. If code found → extract and break loop
-10. If PHONE_REJECTED: update SIM card status in Feishu Base, pick next number, go to step 3 (max 3 retries)
+10. If PHONE_REJECTED: set SIM status to `cooldown`, set `cooldown_until = now + 1 hour`, pick next number, go to step 3 (max 3 retries)
 11. If code found: switch to OpenAI tab, `fillInput` code, `click` Continue
 12. If 3 retries exhausted: mark account as manual_required
 
 ## OpenAI OAuth — Consent Page
+
+Evidence: `live_verified` from historical OpenAI OAuth runs; re-observe on the current run.
 
 Triggered when: snapshotText shows "Continue" / "Allow" / "Authorize" / "授权" / "Accept" buttons and URL is still on openai.com/auth or similar.
 
@@ -359,6 +376,8 @@ Triggered when: snapshotText shows "Continue" / "Allow" / "Authorize" / "授权"
 4. If callback URL detected, extract it
 
 ## SMS Platform — sms369.vip (Web Mode)
+
+Evidence: `screenshot_inferred` from user-provided SIM delivery instructions on 2026-07-28. The response shape is unknown until probed.
 
 Page: token URL like `https://sms369.vip/api/sms/access?token=xxx`
 
@@ -467,7 +486,7 @@ Read from `.env` file:
 6. **sub2api remark field**: Leave empty. Do not store credentials there.
 7. **ego-browser task space isolation**: Each account authorization uses its own task space. Complete it when done.
 8. **Observe-act-verify loop**: Every browser action follows: snapshotText/screenshot → reason → act → snapshotText/screenshot to verify.
-9. **Check known-ui-patterns.md first**: Before live observation of a known platform, check references/known-ui-patterns.md for a cached pattern. Use it if the page matches. After successful live observation of a new platform, append the pattern.
+9. **Check known-ui-patterns.md first**: Read the evidence status before using a pattern. Treat `screenshot_inferred` as a hypothesis, `snapshot_verified` as observed structure only, and `live_verified` as a completed path. After successful live observation or end-to-end completion, update provenance and promote the status only to the level actually proven.
 
 ## Flow A: Provider Document Parsing
 
@@ -543,6 +562,7 @@ For each account with `sub2api_status=pending` (or user-specified emails):
    Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Phone Binding".
    SIM pool selection logic:
    - Query available SIM cards from Feishu Base
+   - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available`
    - Filter: status=available, valid_until > now, cooldown_until < now, bind_count < 3
    - Exclude phones already tried this round
    - Sort by bind_count ascending, pick first
@@ -601,7 +621,7 @@ cd skills/sub2api-auth && node check_all_ban_status.mjs
 - Max 3 bindings per phone number (`bind_count < 3`).
 - 3-day cooldown after each successful bind (`cooldown_until = last_bind_time + 3 days`).
 - 25-30 day validity from purchase (`valid_until`). Expired cards get `status=expired`.
-- On "recently used" rejection: `status=unavailable`, `cooldown_until = now + 1 hour`.
+- On "recently used" rejection: `status=cooldown`, `cooldown_until = now + 1 hour`. A later selection pass restores it to `available` after expiry.
 - Selection priority: lowest `bind_count` first among available cards.
 - If no available card: account gets `sub2api_status=manual_required`.
 
@@ -612,7 +632,7 @@ cd skills/sub2api-auth && node check_all_ban_status.mjs
 | Cloudflare challenge blocks OpenAI login | Wait 30s with periodic snapshotText; if stuck, handOffTaskSpace for user to solve |
 | MFA platform unreachable | Fallback to email helper; if both fail, mark manual_required |
 | SMS platform unreachable | Mark SIM unavailable, try next number |
-| Phone rejected by OpenAI | Mark SIM unavailable + 1h cooldown, try next number (max 3 retries) |
+| Phone rejected by OpenAI | Mark SIM `cooldown` for 1 hour, try next number (max 3 retries) |
 | No SIM cards available | Mark account manual_required |
 | Feishu Base API error | Report to user, do not proceed (no local cache) |
 | Unknown OpenAI UI | Screenshot + visual model analysis; attempt operation; handoff if stuck |
@@ -621,7 +641,7 @@ cd skills/sub2api-auth && node check_all_ban_status.mjs
 
 ## Known UI Patterns
 
-See `references/known-ui-patterns.md` for cached operation sequences. After each successful interaction with a new platform or UI variant, append the pattern to that file.
+See `references/known-ui-patterns.md` for provenance-tagged patterns. Update `screenshot_inferred` to `snapshot_verified` only after observing the live page, and to `live_verified` only after completing the operation with readback.
 
 ## Provider Parsing
 
@@ -741,7 +761,11 @@ Follow SKILL.md Flow B step by step for the first pending account. At each step:
 
 - [ ] **Step 3: Document any new UI patterns discovered**
 
-If any platform's actual UI differed from the seed patterns in known-ui-patterns.md, append the corrected pattern with today's date.
+For every platform touched, update the pattern provenance with the exact date:
+
+- Promote to `snapshot_verified` if the live structure was observed but the operation did not finish.
+- Promote to `live_verified` only if the operation completed and its result was read back.
+- If the UI differs, replace the inferred steps with the observed steps while retaining the old evidence note as history.
 
 - [ ] **Step 4: Verify Feishu Base state after authorization**
 

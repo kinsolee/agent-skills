@@ -130,7 +130,7 @@ SKILL.md 不再是"调用脚本的说明文档"，而是 agent 的操作手册�
 + **新增授权 playbook**：逐步指引 agent 完成一个账号的完整授权流程。
 + **重新授权 playbook**：从飞书 Base 读 revoked 账号，复用新增授权流程。
 + **SIM 池选号规则**：选号优先级、冷却/过期/上限判断、换号重试逻辑。
-+ **已知 UI 模式库**：references/known-ui-patterns.md 里记录已验证的页面操作序列，agent 遇到已知平台时直接套用，遇到未知平台时现场理解并追加记录。
++ **已知 UI 模式库**：references/known-ui-patterns.md 为每条模式记录来源、日期和 `screenshot_inferred` / `snapshot_verified` / `live_verified` 证据状态。推断模式必须先观察真实页面，不能冒充已验证流程。
 
 Playbook 的每一步遵循统一的 observe-act-verify 循环：
 
@@ -182,7 +182,7 @@ agent 通过 lark-base skill（lark-cli 命令）直接读写飞书 Base，不�
 
 绑定成功后更新：bind_count+1、last_bind_time=now、cooldown_until=now+3天、bound_accounts 追加邮箱。
 
-撞 recently-used 时更新：status=unavailable、cooldown_until=now+1小时、notes 追加原因。
+撞 recently-used 时更新：status=cooldown、cooldown_until=now+1小时、notes 追加原因。后续选号前把已到期的 cooldown 记录恢复为 available；unavailable 只用于无法自动恢复的故障。
 
 ### 4.5 Provider 文档解析（agent 交互流程）
 
@@ -203,7 +203,7 @@ agent 通过 lark-base skill（lark-cli 命令）直接读写飞书 Base，不�
 
 ### 4.6 已知 UI 模式库（references/known-ui-patterns.md）
 
-agent 每次成功处理一个平台的 UI 后，将截图描述 + 操作序列追加到这个文件。下次遇到同一平台时直接套用已知模式，跳过"现场理解"步骤，加快速度。
+agent 为每条 UI 模式写入证据状态、来源和日期。截图只能产生 `screenshot_inferred`；观察真实页面后可升级为 `snapshot_verified`；完整操作并读回成功后才能升级为 `live_verified`。下次仅可把 `live_verified` 当作快捷路径，并且操作后仍需验证结果。
 
 格式示例：
 
@@ -311,7 +311,7 @@ agent 在 observe 阶段判断当前页面是否出现手机绑定 UI。判断�
 2. snapshotText 找到手机号输入框，fillInput 填入号码。注意国际区号：观察页面是否有国家下拉框或 `+1` 前缀输入框，按实际 UI 处理。
 3. click 发送按钮（Continue / Send code）。
 4. 等 3 秒，在新 tab 打开接码地址，轮询验证码（每 5 秒 snapshotText 一次，最长 120 秒）。
-5. 如果接码页面显示"无法向此号码发送验证码"或 "This phone number was recently used"：标记该号 unavailable + 1 小时冷却，换号重试（最多 3 次）。
+5. 如果接码页面显示"无法向此号码发送验证码"或 "This phone number was recently used"：标记该号 cooldown + 1 小时，换号重试（最多 3 次）；到期后自动恢复 available。
 6. 如果拿到验证码：切回主 tab，fillInput 填入，click Continue。
 7. 3 次换号都失败：账号标记 manual_required，completeTaskSpace，跳过。
 
@@ -322,7 +322,7 @@ agent 在 observe 阶段判断当前页面是否出现手机绑定 UI。判断�
 | MFA 平台打不开/超时 | agent 截图记录，fallback 到邮箱验证码；邮箱也没有则标记 manual_required |
 | MFA 平台显示邮箱未绑定 | 同上 fallback |
 | 接码平台打不开 | 标记该 SIM 卡 unavailable，换号重试 |
-| 手机号被 OpenAI 拒绝 | 标记 unavailable + 1 小时冷却，换号重试 |
+| 手机号被 OpenAI 拒绝 | 标记 cooldown + 1 小时，换号重试；到期后恢复 available |
 | SIM 池无可用号码 | 账号标记 manual_required，汇总报告 |
 | 飞书 Base API 限流/断网 | agent 报错告知用户（不做本地缓存） |
 | OpenAI 登录页出现未知 UI | agent 截图理解 → 尝试操作 → 搞不定则 handoff 给用户 |
