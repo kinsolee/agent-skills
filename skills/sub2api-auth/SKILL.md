@@ -69,6 +69,8 @@ Read from `.env` file:
 9. **Check known-ui-patterns.md first**: Read the evidence status before using a pattern. Treat `screenshot_inferred` as a hypothesis, `snapshot_verified` as observed structure only, and `live_verified` as a completed path. After successful live observation or end-to-end completion, update provenance and promote the status only to the level actually proven.
 10. **Sensitive Base reads stay silent**: Use `--field-id` projections for only the fields needed by the current step. Capture credential-bearing JSON into a process-local variable and do not let the raw row reach stdout, `cliLog`, commentary, or final output. Do not persist it to local JSON/temp files.
 11. **Exact browser ownership branches**: Ordinary later rounds start with `useOrCreateTaskSpace(<numeric-id>)`. After a confirmed handoff or unexpected takeover, resume with `takeOverTaskSpace(<numeric-id>)`. For a confirmed inactive, unassigned, or user-owned space, use `listTaskSpaces()`, `claimTaskSpace(id)`, `listTabs()`, then `switchTab(targetId)`. A user-control error is a hard stop until explicit confirmation.
+12. **Normalize Base URL cells before browser use**: A Base URL-style text cell may read back as a Markdown link such as `[label](https://...)`. For recognized Markdown-link cells, prefer the URL inside the parentheses; otherwise retain the raw value. Validate the normalized scheme and expected origin/shape, keep it process-local, and never print it.
+13. **Condition-based Base readback**: A successful Base write response is not the completion proof. Poll a projection of the exact record ID until every expected field matches or a bounded timeout expires. A transient stale read must not be reported as either success or permanent failure.
 
 ## Flow A: Provider Document Parsing
 
@@ -113,6 +115,7 @@ For each account with `sub2api_status=pending` (or user-specified emails):
    )"
    ```
    Keep `ACCOUNT_JSON` process-local and do not print it. Require exactly one match, retain the returned GPT `record_id`, and use that exact ID for every later update. If zero or multiple rows match, stop instead of guessing.
+   Before using any URL-valued cell in the browser, apply Hard Rule 12. Do not take the first `https://` substring from a Markdown link because it may include Markdown punctuation.
 
 2. **Create ego-browser task space**:
    ```
@@ -145,8 +148,8 @@ For each account with `sub2api_status=pending` (or user-specified emails):
    - **Consent page** (Continue/Allow/Authorize button):
      Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Consent Page".
 
-   - **Callback redirect** (URL is localhost/127.0.0.1):
-     Extract callback URL, proceed to step 7.
+   - **Callback redirect or callback error page**:
+     If the current URL is localhost/`127.0.0.1`, retain it silently and proceed to step 7. If Chromium renders an error page and the original callback is no longer exposed by `pageInfo()`, call CDP `Page.getNavigationHistory`, recover exactly one original localhost/`127.0.0.1` callback entry, validate its expected path and query-key shape without logging it, then proceed to step 7.
 
    - **Unknown page**:
      `captureScreenshot()`, analyze with visual model, attempt to proceed. If stuck after 2 attempts, call `handOffTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, emit only the returned `{done, skipped}` state, and ask the user for help only when `done === true`. If handoff is skipped, report the ownership state without claiming control was transferred.
@@ -167,17 +170,19 @@ For each account with `sub2api_status=pending` (or user-specified emails):
 
 7. **Fill callback URL in sub2api**:
    Follow `references/known-ui-patterns.md` → "sub2api Admin — Fill Callback URL".
-   Before any success write to Feishu Base, read the account back in sub2api, require Active/normal status, and verify the remark is empty. If either check fails or is ambiguous, do not mark the Base account active.
+   Before any success write to Feishu Base, read the created account back in sub2api and require exactly one matching row, observed status `正常`, and an empty remark in the edit dialog. If uniqueness, status, or remark is ambiguous or fails, do not mark the Base account active.
 
 8. **Update Feishu Base**:
    - GPT update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --record-id "<gpt-record-id>" --json '<field-map>' --as user`.
    - SIM update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '<field-map>' --as user`.
    - `+record-upsert` without `--record-id` creates a new row and must not be used for updates.
-   - Success: update the GPT record to `sub2api_status=active`, `auth_time=<YYYY-MM-DD HH:mm:ss>`, and `bound_phone=<phone>`.
+   - Initial authorization success: update the GPT record to `sub2api_status=active` and `auth_time=<YYYY-MM-DD HH:mm:ss>`. Set `bound_phone=<phone>` only when this run completed a new phone binding.
+   - Re-authorization success: update the GPT record to `sub2api_status=active` and `last_reauth_time=<YYYY-MM-DD HH:mm:ss>`. Preserve the existing `bound_phone` unless this run completed a new phone binding.
+   - If OpenAI proceeds from MFA directly to consent/callback without phone verification, do not update the SIM row, do not increment `bind_count`, and do not create a cooldown.
    - Successful phone binding: re-read the exact SIM record, compute the complete field map from those observed values, perform one `+record-upsert`, then read back. Increment `bind_count`, set `last_bind_time=<YYYY-MM-DD HH:mm:ss>`, set `cooldown_until=<now + 3 days>` in the same format, append the email to `bound_accounts`, and set `status=cooldown` unless the new bind count is 3, in which case set `status=exhausted`. Do not claim concurrency-safe atomic increment.
    - "Recently used" rejection: update only `status=cooldown`, `cooldown_until=<now + 1 hour>`, and the real SIM field `notes` with a redacted diagnostic. Do not increment `bind_count`, `last_bind_time`, or `bound_accounts`. Read back projected `status`, `cooldown_until`, `notes`, `bind_count`, `last_bind_time`, and `bound_accounts`; require the three binding fields to equal their pre-write values.
    - Failure: update the GPT record to `sub2api_status=failed` or `manual_required` and append a redacted error to `notes`.
-   - Read back every updated record with a projected `+record-list --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' --limit 2` or the corresponding phone-number filter before continuing. Require exactly one match and do not project password or secret-bearing URL fields.
+   - Read back every updated record with a projection of the exact retained `record_id`; use the email/phone filter only as an additional uniqueness check when needed. Poll until the expected field values match or a bounded timeout expires. Require exactly one match and do not project password or secret-bearing URL fields.
 
 9. **Complete task space**:
    Run this as its own dedicated final heredoc only after a prior heredoc has verified that the browser portion is genuinely complete. Use the numeric ID retained from step 2; the `task` variable does not survive between heredocs.
