@@ -257,7 +257,11 @@ This file contains both hypotheses and verified operation sequences. Every patte
 
 ## sub2api Admin — Login
 
-Evidence: `live_verified` from historical sub2api automation and operations notes; host changed to `<sub2api-host>`, so take a fresh snapshot before the first current run.
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: the historical host differed; take a fresh snapshot on `<sub2api-host>` before the first current action
 
 Page: `SUB2API_ADMIN_URL` (default `http://<sub2api-host>:8080/admin/accounts`)
 
@@ -272,7 +276,11 @@ Note: ego-browser may inherit user's login session. If already logged in, skip t
 
 ## sub2api Admin — Generate Auth URL
 
-Evidence: `live_verified` from historical sub2api automation; refresh `as_of` after the first current run.
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: refresh provenance after the first run on the current host
 
 Prerequisite: logged in, on accounts page.
 
@@ -289,7 +297,11 @@ Prerequisite: logged in, on accounts page.
 
 ## sub2api Admin — Fill Callback URL
 
-Evidence: `live_verified` from historical sub2api automation; refresh `as_of` after the first current run.
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: refresh provenance after the first run on the current host
 
 Prerequisite: account dialog still open, callback URL obtained from OpenAI flow.
 
@@ -300,7 +312,11 @@ Prerequisite: account dialog still open, callback URL obtained from OpenAI flow.
 
 ## OpenAI OAuth — Login Page
 
-Evidence: `live_verified` from historical OpenAI OAuth runs; always re-observe because OpenAI UI changes frequently.
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical OpenAI OAuth automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: OpenAI UI is drift-prone; re-observe before every action
 
 Page: authorization URL from sub2api.
 
@@ -320,7 +336,11 @@ Page: authorization URL from sub2api.
 
 ## OpenAI OAuth — MFA Verification (2fa.nloop.cc)
 
-Evidence: `screenshot_inferred` from user-provided provider instructions on 2026-07-28. Not yet live verified.
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided GPT provider instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: not yet observed live
 
 Triggered when: snapshotText shows a code input field (`input[name="code"]`, `input[autocomplete="one-time-code"]`, or 6 separate digit inputs) AND the account record has `mfa_platform_url`.
 
@@ -339,7 +359,11 @@ Fallback: If MFA platform returns no result for this email, try email helper (em
 
 ## OpenAI OAuth — Phone Binding
 
-Evidence: `screenshot_inferred` from user-provided provider instructions on 2026-07-28. Not yet live verified.
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided SIM provider instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: not yet observed live
 
 Triggered when: snapshotText or screenshot shows "phone number", "Check your phone", "Enter the verification code we just sent to", "添加电话号码", or a phone number input field.
 
@@ -362,7 +386,11 @@ Triggered when: snapshotText or screenshot shows "phone number", "Check your pho
 
 ## OpenAI OAuth — Consent Page
 
-Evidence: `live_verified` from historical OpenAI OAuth runs; re-observe on the current run.
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical OpenAI OAuth automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: re-observe on the current run
 
 Triggered when: snapshotText shows "Continue" / "Allow" / "Authorize" / "授权" / "Accept" buttons and URL is still on openai.com/auth or similar.
 
@@ -373,7 +401,11 @@ Triggered when: snapshotText shows "Continue" / "Allow" / "Authorize" / "授权"
 
 ## SMS Platform — sms369.vip (Web Mode)
 
-Evidence: `screenshot_inferred` from user-provided SIM delivery instructions on 2026-07-28. The response shape is unknown until probed.
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided SIM delivery instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: response shape is unknown until a live probe
 
 Page: token URL like `https://sms369.vip/api/sms/access?token=xxx`
 
