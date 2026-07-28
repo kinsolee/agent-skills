@@ -1,0 +1,169 @@
+# Known UI Patterns
+
+This is a provenance-aware reference library, not a claim of current live validation. It contains both hypotheses and historically verified operation sequences. Every pattern records:
+
+- `evidence_status`: `screenshot_inferred`, `snapshot_verified`, or `live_verified`
+- `source`: the screenshot, live page, or historical run that supports it
+- `as_of`: exact capture or verification date when known
+- `scope_note`: what the evidence does and does not establish
+
+`screenshot_inferred` is a hypothesis only: observe the live page before acting. `snapshot_verified` means the current page structure was observed but the full operation was not completed. Only `live_verified` means the complete operation and readback succeeded. Historical `live_verified` evidence does not establish that the current host or a drift-prone third-party UI still matches.
+
+## Browser Operating Contract
+
+For every pattern below:
+
+1. Create or select one named task space with `useOrCreateTaskSpace(...)`, retain its returned numeric ID, and reuse that same task space across all heredoc rounds for the operation.
+2. Use the semantic workflow (`snapshotText()` plus current refs or locators) first for these normal forms. Observe, act, then verify with a fresh `snapshotText()`, `pageInfo()`, or other reliable readback after each meaningful action.
+3. A snapshot ref such as `@12` is valid only when it appears in the latest `snapshotText()` output. Take a fresh snapshot before selecting a ref; never reuse a ref from an older snapshot. Prefer a current `loc=...` or stable CSS selector when appropriate.
+4. If ego-browser reports that the user is controlling the task space, or that the space is inactive or unassigned, hard stop. Do not retry, route around, or call `takeOverTaskSpace` automatically. Ask the user and resume only after explicit confirmation, using the ownership flow required by ego-browser.
+5. If manual login, CAPTCHA, or another user-only step is required, call `handOffTaskSpace(task.id)`, check that the result reports `done: true`, and explain the required action. Regain control only after explicit user confirmation.
+6. After a prior heredoc has verified that the whole task is complete, run `completeTaskSpace(task.id, { keep: false })` in its own dedicated final heredoc. Use `keep: true` only for a concrete user-requested or manual-action reason.
+7. Never print or persist passwords, authorization secrets, or full token-bearing URLs. Redact credentials and show token URLs only with `token=xxx`.
+
+## sub2api Admin — Login
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: historical live verification used a different host; it does not validate the current host, so take a fresh snapshot on `<sub2api-host>` before the first current action and treat UI drift as possible
+
+Page: `SUB2API_ADMIN_URL` (default `http://<sub2api-host>:8080/admin/accounts`)
+
+1. In the reused task space, `openOrReuseTab(adminUrl, { wait: true })`.
+2. `snapshotText()` and `pageInfo()` — check whether the URL contains `/login`.
+3. If login is required, use refs from that latest snapshot to find the email input (placeholder contains "email") and `fillInput` with the admin email; then take a fresh snapshot to verify the value/state without exposing it.
+4. From the fresh snapshot, find the password input (placeholder contains "password") and `fillInput` with the redacted admin password; take another fresh snapshot.
+5. Use only a ref present in that latest snapshot to `click` the submit button (`button[type="submit"]` or text "Sign In").
+6. `snapshotText()` and `pageInfo()` — verify the URL no longer contains `/login` and that the accounts UI is present.
+
+Note: ego-browser may inherit the user's login session. If already logged in, skip credential entry and verify the accounts UI. Never log credentials.
+
+## sub2api Admin — Generate Auth URL
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: historical completion is not current-host validation; refresh provenance after the first successful run on the current host and re-observe every dialog state for drift
+
+Prerequisite: logged in on the accounts page.
+
+1. `snapshotText()` — look for "Add Account" or "添加账号" and click only a ref from this snapshot.
+2. Take a fresh `snapshotText()` — verify that the account dialog appeared with platform, group, and type selectors.
+3. Using current refs/locators, select platform = "OpenAI", group = configured group, and account type = "Oauth"; observe again to verify the selections.
+4. Locate the proxy selector in the latest snapshot and pick a real configured proxy, excluding "无代理" / "No Proxy"; observe again.
+5. Click the current confirm/add ref, then take a fresh snapshot and verify the next dialog state.
+6. Find "Generate Auth URL", "Generate Auth Link", or "生成授权链接" in the latest snapshot and click its current ref.
+7. Take a fresh snapshot and locate the authorization URL text or copy control; extract the URL without logging the full secret-bearing value.
+8. If the value is not semantically visible, use a single explicit `js()` IIFE to read the relevant input/textarea value, then verify its expected origin/shape without emitting the full URL.
+
+## sub2api Admin — Fill Callback URL
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical sub2api automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: historical completion is not current-host validation; refresh provenance after the first successful current-host run and re-observe field labels before acting
+
+Prerequisite: account dialog remains open and the OpenAI flow returned a callback URL.
+
+1. `snapshotText()` — locate the input labeled "授权链接", "Code", "Authorization URL", or "Callback".
+2. `fillInput` using a ref from that snapshot, without logging the callback URL; then take a fresh snapshot to verify field state.
+3. Click the confirm/submit ref from the latest snapshot.
+4. `snapshotText()` — verify the dialog closed or the account status changed; use the resulting account/status readback as the completion check.
+
+## OpenAI OAuth — Login Page
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical OpenAI OAuth automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: OpenAI UI is drift-prone; historical live verification does not establish current behavior, so re-observe before every action
+
+Page: authorization URL generated by sub2api. Do not log the full URL.
+
+1. In the reused task space, `openOrReuseTab(authUrl, { wait: true })`.
+2. Wait 3 seconds for page load and a possible Cloudflare challenge.
+3. `snapshotText()` — if a challenge is present, wait and retry every 3 seconds for at most 30 seconds. If it remains, hand off the task space and ask the user to solve it; do not bypass it.
+4. From the latest snapshot, find the email input (`input[name="username"]`, `input[type="email"]`, or observed equivalent), fill the account email, and observe again.
+5. Click the current Continue/Next/继续 ref; wait 2–3 seconds and take a fresh snapshot.
+6. If "Continue with password", "使用密码继续", or "Use password instead" appears, click its current ref and observe again.
+7. Locate the password input in the latest snapshot, fill the redacted account password, and observe again without exposing it.
+8. Click the current Continue/Log in/登录 ref, wait 2–3 seconds, then `snapshotText()` and `pageInfo()` to determine the next state: MFA, email verification, phone binding, consent, or callback redirect.
+
+## OpenAI OAuth — MFA Verification (2fa.nloop.cc)
+
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided GPT provider instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: screenshot-only hypothesis; neither the current DOM nor the end-to-end MFA behavior has been observed live, so every element and transition must be freshly observed before acting
+
+Hypothesized trigger: the latest OpenAI snapshot shows a code input (`input[name="code"]`, `input[autocomplete="one-time-code"]`, or six digit inputs) and the account record has `mfa_platform_url`.
+
+1. Open the configured MFA platform URL in a new tab within the same task space; do not log any secret-bearing URL.
+2. `snapshotText()` — test the screenshot hypothesis by locating an email input on the right panel, possibly labeled "粘贴邮箱" or showing an `@` prefix. If absent, stop this pattern and re-observe; do not guess.
+3. Fill the account email using a ref from the latest snapshot, wait 2–3 seconds, and take a fresh snapshot.
+4. Look for a 6-digit code near a countdown. If none is observed, do not claim failure behavior that the screenshot did not establish.
+5. If an observed countdown is below 5 seconds, wait for and verify a refresh before extracting the newly displayed 6-digit code.
+6. Switch back to the existing OpenAI tab, take a fresh snapshot, fill the code using a current ref, and observe again.
+7. Click the current Continue/Verify/验证 ref, then verify the resulting state with a fresh snapshot and `pageInfo()`.
+
+Hypothesized fallback only: if no MFA result appears, the historical script suggests an email helper at `email.nloop.cc` using the same-tab-space multi-tab approach. Its current UI and behavior require separate observation before any action.
+
+## OpenAI OAuth — Phone Binding
+
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided SIM provider instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: screenshot-only hypothesis; phone-entry, rejection, retry, and SMS-delivery behavior are not live-verified and must be observed before each action
+
+Hypothesized trigger: the latest snapshot or screenshot shows "phone number", "Check your phone", "Enter the verification code we just sent to", "添加电话号码", or a phone input.
+
+1. Query Feishu Base for currently available SIM cards; use only authorized real records and preserve their provenance.
+2. Pick the best number according to the verified SIM-pool rules; do not invent a number or status.
+3. `snapshotText()` — locate the phone input and observe actual country-code handling before acting. Do not assume whether a dropdown or `+1` prefix exists.
+4. Fill the number using a current ref, observe again, click the current Continue/Send code ref, wait 3 seconds, and verify the resulting OpenAI state.
+5. Open the configured SMS URL in a new tab in the same task space without logging the full token URL.
+6. For at most 120 seconds, every 5 seconds take a fresh SMS-tab snapshot and inspect the actual response for a 4–8 digit code. Do not reuse refs across snapshots.
+7. If the observed provider/OpenAI response identifies the number as rejected (for example, "无法向此号码发送验证码" or "This phone number was recently used"), return `PHONE_REJECTED`.
+8. On `PHONE_REJECTED`, update the real SIM record to recoverable `status=cooldown` and `cooldown_until=now+1 hour`; never mark it permanently unavailable. Read back both fields, choose another eligible number, and retry from phone entry, up to 3 total numbers.
+9. When a code is observed, switch to the OpenAI tab, take a fresh snapshot, fill the code using a current ref, click the current Continue ref, and verify the next state.
+10. If 3 verified attempts are exhausted, mark the account `manual_required` and read back that state. Do not infer exhaustion from an unobserved screenshot hypothesis.
+
+## OpenAI OAuth — Consent Page
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: historical OpenAI OAuth automation, latest relevant commit `9aca6f1`
+- `as_of`: `2026-05-12`
+- `scope_note`: historical completion does not establish the current drift-prone OpenAI UI; re-observe and verify the current URL and controls on every run
+
+Triggered when the latest snapshot shows a consent control such as "Continue", "Allow", "Authorize", "授权", or "Accept", and `pageInfo()` confirms an OpenAI authentication origin or observed equivalent.
+
+1. Click only the consent ref present in the latest snapshot.
+2. Wait 2–3 seconds, then call `snapshotText()` and `pageInfo()`.
+3. Verify whether the URL redirected to the expected localhost/`127.0.0.1` callback and extract it without logging the full callback URL.
+
+## SMS Platform — sms369.vip (Web or API Mode)
+
+Evidence:
+- `evidence_status`: `screenshot_inferred`
+- `source`: user-provided SIM delivery instruction screenshot
+- `as_of`: `2026-07-28`
+- `scope_note`: screenshot-only hypothesis; response mode, response shape, DOM, polling behavior, and code extraction remain unknown until a live probe
+
+Page example, redacted: `https://sms369.vip/api/sms/access?token=xxx`
+
+1. Open the configured URL in the reused task space without logging the full token URL.
+2. `snapshotText()` and, where available, inspect the observed content type/response to determine whether the endpoint currently returns HTML or JSON. Do not assume the mode from the screenshot.
+3. For observed HTML, locate real SMS message text and extract only an observed 4–8 digit verification code.
+4. For observed JSON, use a single explicit `js()` IIFE or `browserFetch()` in the authenticated page context to inspect the real response shape, redacting tokens and unrelated message content from logs.
+5. Verify the extracted code against the displayed/returned message before use. A successful first probe may justify updating this pattern with the actual DOM or response schema and new provenance.
+
+---
+
+This file may grow after successful automation runs. Add or promote a pattern only with its new evidence status, source, as-of date, scope note, and successful observe–act–verify/readback evidence.
