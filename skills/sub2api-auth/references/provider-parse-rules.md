@@ -2,6 +2,31 @@
 
 Rules derived from real provider delivery screenshots. Agent follows these when parsing user-provided screenshots or text.
 
+## Source Modes and Precedence
+
+- Treat user-pasted provider one-click-copy output as `direct_copy_text`. It is a first-class source; values copied directly as text do not require visual-model or OCR validation.
+- Treat values read only from pixels as `screenshot`. Every critical screenshot-only value—including credentials, URLs, identifiers, provider/order metadata, stated quantity, and timestamp—requires two independent visual reads that agree.
+- If identified direct one-click-copy output conflicts with screenshot OCR, prefer the direct value only when it passes the structural rules below. Record both source modes and the conflict resolution in the redacted preview without echoing either value.
+- Use direct text for credential values and row identifiers. An accompanying order screenshot/page may supply only missing provider, order number, stated quantity, and order-creation timestamp, subject to the screenshot cross-validation rule for critical strings.
+- Never infer missing metadata from a URL host, current date, paste/import time, another pack, a prior order, or an example in this reference. Show each absent field as `missing` and ask one compact follow-up. A missing order timestamp blocks `valid_until` and makes the affected SIM ineligible for write or authorization.
+
+## Direct-Text Section Parsing and Normalization
+
+1. Normalize line endings, then trim only surrounding whitespace and blank lines from the whole block and individual extracted fields. Do not alter internal characters or case in passwords, tokens, URLs, emails, or phone identifiers.
+2. Do not HTML-decode direct clipboard text unless provenance proves that the input is escaped HTML source rather than rendered clipboard text.
+3. Parse each `=== 使用说明 ===` / `=== 卡密内容 ===` pair independently. Do not carry metadata or values between pairs.
+4. Extract account or SIM rows only from `卡密内容`; instruction examples are not data rows. Extract the shared password and platform URLs only from their labeled fields in `使用说明`.
+5. For SIM rows, split once on the first `|`; when no `|` exists, split once on the first `----`. Preserve the entire right side, including its query/token string.
+
+## Structural, Quantity, Type, and Duplicate Gates
+
+- GPT row: require a complete valid email shape, a non-empty shared password, and a valid HTTP(S) MFA URL when present.
+- SIM row: require a digits-only phone identifier and a non-empty HTTP(S) URL, with neither side empty.
+- Reject malformed rows. Do not silently repair, normalize, decode, or guess credential characters.
+- Always report the observed parsed-row count. When a stated quantity exists, require exact equality. When it is absent, mark the authoritative quantity check `unavailable`; the observed count is not a substitute.
+- Before any create, detect duplicates within the incoming batch and against current Base records. Project only the minimum identifiers needed for the comparison; never read or print unneeded credential fields. Do not silently create duplicates and do not use batch-create until the duplicate result is resolved.
+- Do not classify a platform as `网页` or `API` from URL shape. Require an observed live response. Until then use only a schema-supported unknown state; because GPT MFA currently has no documented `unknown` enum, absent live type evidence blocks that GPT write pending schema/evidence resolution.
+
 ## Dual Visual Model Cross-Validation
 
 1. For every password, secret key, URL, or token string extracted from a screenshot, run two independent visual model reads.
@@ -31,12 +56,12 @@ Observed structure (from 链动小铺 order LD26072731CVWM):
 - **Quantity**: From "数量" field. Must match the number of card entries parsed.
 
 Parsing algorithm:
-1. Extract all email addresses from the card list section (look for numbered entries or lines matching email regex).
-2. Extract the shared password from the usage instructions.
-3. Extract MFA platform URL.
-4. Extract email helper URL if present.
-5. Extract order number and provider name.
-6. Verify: number of emails parsed == quantity stated in order.
+1. Extract complete email rows only from the `卡密内容` section.
+2. Extract the non-empty shared password only from its labeled usage-instruction field.
+3. Extract and validate the labeled HTTP(S) MFA platform URL.
+4. Extract and validate a labeled email helper URL if present.
+5. Capture order number, provider, stated quantity, and order-creation timestamp from the pack or its accompanying order evidence; otherwise mark each missing value explicitly.
+6. Report the observed email count. If stated quantity exists, require equality; otherwise mark the authoritative check unavailable.
 
 ## SIM Card Pack Format
 
@@ -50,33 +75,40 @@ Observed structure (from 链动小铺 order LD260727B55K8S):
 - **Quantity**: From "数量" field. Must match number of card entries parsed.
 
 Parsing algorithm:
-1. For each card entry, split on `|` first; if no `|` found, split on `----`.
-2. Left part = phone_number, right part = sms_url.
-3. Extract order number and validity period.
-4. Verify: number of entries parsed == quantity stated.
+1. For each row in `卡密内容`, split once on the first `|`; if none exists, split once on the first `----`.
+2. Validate the left side as a non-empty digits-only phone identifier and the entire right side as a non-empty HTTP(S) URL.
+3. Extract the order number, order-creation timestamp, stated validity range, and stated quantity. Missing order timestamp blocks `valid_until`; never substitute paste/import time.
+4. Compute `valid_until` only from the verified order-creation timestamp plus the stated upper-bound duration.
+5. Report the observed entry count. If stated quantity exists, require equality; otherwise mark the authoritative check unavailable.
 
 ## Multi-Pack Handling
 
-User may provide multiple screenshots in one message (e.g., one GPT pack + one SIM pack, or multiple of each). Parse each independently, then merge all gpt_accounts records and all sim_cards records into single batch writes.
+User may provide multiple direct-copy blocks and/or screenshots in one message. Parse each pack independently. Merge valid records only after every pack has retained its own provenance and passed metadata, quantity, structural, type-evidence, and duplicate gates; never assume two packs share an order or provider.
 
 ## Echo Format
 
-After parsing, present a redacted preview to the user in this format. The unmasked values remain only in the current in-memory operation and the confirmed Feishu Base write; do not print them or persist them to local JSON/temp files.
+After parsing, always present a structurally complete redacted preview. Include source mode (`direct_copy_text` and/or screenshot metadata), observed count, one masked row per item, missing fields, structural/quantity/type validation, and duplicate-check state. The unmasked values remain only in the current in-memory operation and the confirmed Feishu Base write; do not print them or persist them to local JSON/temp files.
 
 ```
-GPT 账号包（订单 XXXXX，provider: XXX）:
+GPT 账号包（source: direct_copy_text + screenshot metadata）:
+  订单: <masked-or-missing>; provider: <masked-or-missing>; stated quantity: <value-or-missing>
+  observed count: 2; validation: <state>; duplicate check: <state>
   密码: ***
-  MFA 平台: https://2fa.example/（不含密钥时可显示域名；secret-bearing URL 用 ***）
-  邮箱助手: https://email.example/（如有，不含密钥时可显示域名）
+  MFA 平台: <non-secret origin-or-***>; type evidence: <state>
+  邮箱助手: <non-secret origin-or-***-or-absent>
   账号列表:
-    1. e***1@example.com
-    2. e***2@example.com
-    ...
+    1. e***@***
+    2. a***@***
 
-手机卡包（订单 XXXXX）:
-  1. 131****7887 → https://sms369.vip/...token=***
-  2. 131****6503 → https://sms369.vip/...token=***
-  ...
+手机卡包（source: direct_copy_text + screenshot metadata）:
+  订单: <masked-or-missing>; order timestamp: <masked-or-missing>; stated quantity: <value-or-missing>
+  observed count: 2; valid_until: <masked-or-unavailable>
+  validation: <state>; duplicate check: <state>; type evidence: <state>
+  1. 12****78 → <non-secret origin-or-***>
+  2. 98****54 → <non-secret origin-or-***>
 
-确认写入飞书 Base？
+missing fields/blockers: <none-or-list>
+<If blockers exist, ask one compact evidence follow-up. Otherwise ask for explicit confirmation for this batch.>
 ```
+
+Never use an earlier general automation request as confirmation. Only explicit confirmation for the current parsed batch, issued after all blockers are resolved, permits its Base write or authorization start.

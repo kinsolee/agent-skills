@@ -58,8 +58,8 @@ Read from `.env` file:
 
 ## Hard Rules
 
-1. **Dual visual model cross-validation**: Every password, key, URL, or token extracted from screenshots must be read by two visual models independently. Adopt only if both agree. If they disagree, ask the user.
-2. **Redacted echo before write**: After parsing provider docs, echo a structurally complete preview with counts and one masked row per parsed item. Mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
+1. **Source-specific validation**: Direct user-pasted one-click-copy text is a first-class source and does not require visual/OCR validation. Every critical value extracted only from screenshots—including credentials, URLs, identifiers, provider/order metadata, stated quantity, and timestamp—must still be read by two visual models independently; adopt it only if both agree. When identified direct-copy text conflicts with screenshot OCR, prefer the direct value only after structural validation and record the source distinction in the redacted preview without echoing the value.
+2. **Redacted echo and per-batch confirmation before write**: After parsing provider docs, echo a structurally complete preview with observed counts, source mode, missing fields, validation state, duplicate-check state, and one masked row per parsed item. Mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs. Resolve all metadata, type-evidence, quantity, and duplicate blockers, then wait for explicit confirmation for that current parsed batch before writing to Feishu Base or starting authorization. A general standing request such as “以后自动处理” is not batch confirmation.
 3. **HTML entity provenance**: Keep screenshot OCR raw. Decode entities only for values proven to come from HTML source/DOM text, using standards-compliant decoding.
 4. **Redact in all output**: Never show full passwords, tokens, MFA secrets, emails, phone numbers, authorization URLs, callback URLs, or token-bearing URLs in stdout, `cliLog`, commentary, progress reports, errors, cleanup messages, or final output. Use `***` masking and show only non-secret URL origins when useful.
 5. **No local credential cache**: Feishu Base is the single source of truth.
@@ -78,20 +78,22 @@ See `references/provider-parse-rules.md` for detailed parsing rules.
 
 ### Steps
 
-1. Receive screenshots/text from user.
-2. For each screenshot, identify pack type: GPT account pack or SIM card pack.
-3. Extract structured data following provider-parse-rules.md.
-4. Run dual visual model cross-validation on all critical strings (passwords, URLs, tokens).
-5. Echo the redacted structured preview specified in provider-parse-rules.md. Keep exact parsed values out of output.
-6. Wait for user confirmation.
-7. On confirmation, write to Feishu Base:
+1. Receive direct copied text and/or screenshots from the user. Treat each `=== 使用说明 ===` / `=== 卡密内容 ===` pair as an independent pack and identify it as GPT or SIM without borrowing values from another pack.
+2. Extract and structurally validate data following provider-parse-rules.md. For direct-copy text, preserve credential characters exactly and do not run visual/OCR validation. For values extracted only from screenshots, run the mandatory two independent visual reads.
+3. Use direct text for secrets and row identifiers. Use an accompanying order screenshot/page only to fill missing provider, order number, stated quantity, and order timestamp; screenshot-only critical strings must satisfy the two-read rule. Do not infer missing metadata from a URL host, the current date, paste/import time, another pack, a previous order, or reference examples.
+4. If metadata remains missing, show it as missing and ask one compact follow-up. A missing order timestamp blocks SIM `valid_until` calculation and authorization eligibility; it may not be replaced by paste/import time.
+5. Before create, detect duplicates within the incoming batch and against current Base records using only the minimum identifier fields needed. Keep credential fields silent. Do not create or batch-create until duplicate results are resolved.
+6. Require observed live-response evidence before classifying an MFA or SMS URL as `网页` or `API`; never infer type from URL shape. Use only a schema-supported unknown state while evidence is absent. Because GPT MFA currently has no documented `unknown` enum, missing live type evidence blocks its write until schema/evidence resolution.
+7. Echo the redacted structured preview specified in provider-parse-rules.md. Keep exact parsed values out of output. The preview must expose every blocker and may ask for confirmation only after all blockers are resolved.
+8. Wait for explicit confirmation for the current parsed batch. Confirmation does not override an unresolved blocker.
+9. On current-batch confirmation after the metadata, quantity, type, structural-validation, and duplicate gates pass, write to Feishu Base:
    - GPT accounts: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --json '{"fields":["email","password","source_order","source_provider","mfa_platform_url","mfa_platform_type","email_helper_url","sub2api_status"],"rows":[["<email>","<password>","<order>","<provider>","<mfa-url>","<网页-or-API>","<email-helper-or-null>","pending"]]}' --as user`
    - SIM cards: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --json '{"fields":["phone_number","sms_url","sms_type","source_order","bound_accounts","bind_count","cooldown_until","valid_until","status"],"rows":[["<phone>","<sms-url>","<网页-or-API-or-unknown>","<order>",null,0,null,"<YYYY-MM-DD HH:mm:ss>","available"]]}' --as user`
    - Batch payloads always use the current `{"fields":[...],"rows":[...]}` shape. Keep row order aligned with `fields`, use `null` for empty cells, and split batches above 200 rows.
    - Set `sub2api_status` to `pending` for new GPT accounts.
-   - Set `status` to `available`, `bind_count` to 0, `valid_until` to order_date + 30 days for new SIM cards.
+   - Set `status` to `available`, `bind_count` to 0, `valid_until` to the verified order-creation timestamp plus the stated validity upper bound (30 days for the observed 25–30 day contract) for new SIM cards.
    - All Base datetime CellValues use `YYYY-MM-DD HH:mm:ss`.
-8. Report to user: "X accounts and Y SIM cards written to Feishu Base. Ready to authorize?"
+10. Report to user: "X accounts and Y SIM cards written to Feishu Base. Ready to authorize?"
 
 ## Flow B: New Account Authorization
 
