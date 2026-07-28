@@ -7,8 +7,8 @@ Session-derived operational details for this user's WSL sub2api OAuth automation
 - Installed skill path: `/home/kinso/.hermes/profiles/infra-agent/skills/sub2api-auth`
 - Local sub2api compose file: `/home/kinso/sub2api/docker-compose.yml`
 - Admin credentials for the local container are in compose environment keys `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
-- Local admin URL used successfully: `http://<ego-browser-host>:8080/admin/accounts`
-- Health check: `curl -sS -m 5 http://<ego-browser-host>:8080/health`
+- Local admin URL used successfully: `http://<sub2api-host>:8080/admin/accounts`
+- Health check: `curl -sS -m 5 http://<sub2api-host>:8080/health`
 - Camofox browser service: `http://localhost:9377`
 
 ## Account-line default intent
@@ -40,7 +40,7 @@ def get(name):
 env = os.environ.copy()
 env['SUB2API_ADMIN_EMAIL'] = get('ADMIN_EMAIL')
 env['SUB2API_ADMIN_PASSWORD'] = get('ADMIN_PASSWORD')
-env['SUB2API_ADMIN_URL'] = 'http://<ego-browser-host>:8080/admin/accounts'
+env['SUB2API_ADMIN_URL'] = 'http://<sub2api-host>:8080/admin/accounts'
 cmd = ['node','src/authorize-openai-oauth.mjs','--accounts','accounts.txt','--headless','true','--timeout','600000']
 sys.exit(subprocess.call(cmd, env=env))
 PY

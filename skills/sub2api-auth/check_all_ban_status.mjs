@@ -10,7 +10,7 @@ const envLine = (name) => {
 };
 const adminEmail = envLine('ADMIN_EMAIL');
 const adminPassword = envLine('ADMIN_PASSWORD');
-const adminUrl = 'http://<ego-browser-host>:8080/admin/accounts';
+const adminUrl = 'http://<sub2api-host>:8080/admin/accounts';
 
 async function loadCredentialFallbacks() {
   const { execFileSync } = await import('node:child_process');
