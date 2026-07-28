@@ -8,3 +8,4 @@ test-results/
 .omc/
 .DS_Store
 .reauth-backup.txt
+.worktrees/
