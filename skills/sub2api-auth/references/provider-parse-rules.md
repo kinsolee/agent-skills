@@ -29,30 +29,30 @@ Rules derived from real provider delivery screenshots. Agent follows these when 
 
 ## Dual Visual Model Cross-Validation
 
-1. For every password, secret key, URL, or token string extracted from a screenshot, run two independent visual model reads.
+1. For every critical value extracted only from a screenshot, run two independent visual model reads.
 2. If both reads produce identical strings, adopt the result.
-3. If they differ, stop and ask the user to confirm the correct value. Do not guess or pick one.
-4. After extraction, echo a structurally complete but redacted preview to the user and wait for explicit confirmation before writing to Feishu Base. Preserve counts, provider/order provenance, and one row per parsed item, but mask passwords, tokens, MFA material, full email addresses, full phone numbers, and secret-bearing URLs.
+3. If they differ, do not adopt either screenshot-derived value. Stop and request new evidence. A user response can resolve the value without two agreeing visual reads only when the user supplies identified direct one-click-copy text and that value passes the direct-text structural path; a plain confirmation of one visual candidate is insufficient.
+4. After extraction, echo a structurally complete but redacted preview. If any metadata, quantity, structural, type-evidence, or duplicate blocker remains, request the missing evidence and do not ask for write confirmation. Only after every blocker is resolved may the preview ask for explicit confirmation for the current batch. Preserve counts, provider/order provenance, and one row per parsed item, but mask passwords, tokens, MFA material, full email addresses, full phone numbers, and secret-bearing URLs.
 
 ## HTML Entity Handling
 
 - Screenshot OCR is pixel-derived text. Preserve it exactly for the two independent visual reads; do not reinterpret an OCR fragment such as `&#26;` as an HTML entity.
 - Decode only when provenance proves the value came from HTML source/DOM text that still contains escaped entities.
 - Use a standards-compliant decoder. Examples: `&amp;` → `&`, `&#35;` → `#`, `&#33;` → `!`; numeric entities map to their actual Unicode code points.
-- `&#26;` does **not** mean `&`; it is Unicode control code U+001A. If a visual read produces it inside a password, treat it as suspicious OCR and rely on the independent visual comparison or user confirmation.
+- `&#26;` does **not** mean `&`; it is Unicode control code U+001A. If a visual read produces it inside a password, treat it as suspicious OCR and require two agreeing visual reads. Alternatively, the user may supply identified direct one-click-copy text, which must follow the direct-text structural path; merely confirming one OCR candidate is insufficient.
 
 For screenshots, cross-validate raw visual reads first. For proven HTML-source strings, decode after capture and then cross-validate the decoded value before storage.
 
 ## GPT Account Pack Format
 
-Observed structure (from 链动小铺 order LD26072731CVWM):
+Observed structure from a redacted real provider order snapshot; provider and order identifiers are withheld:
 
 - **Card list**: Each card entry contains one email address. Cards are numbered (第1张, 第2张, ...).
 - **Password**: Found in "使用说明" section, typically labeled "ChatGPT 登录密码默认：XXX" or "发货格式（Gmail 邮件发货，账户已添加密码和 MFA）（ChatGPT 登录密码默认：XXX）". This is a shared password for all accounts in the pack.
-- **MFA platform URL**: Found in "使用说明" section, labeled "MFA 接码地址：URL". Example: `https://2fa.nloop.cc/`
-- **Email helper URL**: Sometimes mentioned separately for email verification codes. Example: `https://email.nloop.cc/`
-- **Order number**: From "订单号" field. Example: `LD26072731CVWM`
-- **Provider name**: From page header or merchant name. Example: "链动小铺"
+- **MFA platform URL**: Found in "使用说明" section, labeled "MFA 接码地址：URL". Preserve the validated HTTP(S) value in process memory and mask it in output.
+- **Email helper URL**: Sometimes mentioned separately for email verification codes. Preserve a validated HTTP(S) value in process memory and mask it in output.
+- **Order number**: From "订单号" field. Preserve it in process memory and mask it in output.
+- **Provider name**: From the page header or merchant name. Preserve it in process memory and mask it in output.
 - **Quantity**: From "数量" field. Must match the number of card entries parsed.
 
 Parsing algorithm:
@@ -65,11 +65,11 @@ Parsing algorithm:
 
 ## SIM Card Pack Format
 
-Observed structure (from 链动小铺 order LD260727B55K8S):
+Observed structure from a redacted real provider order snapshot; provider and order identifiers are withheld:
 
 - **Card list**: Each card entry contains `phone_number|sms_url` or `phone_number----sms_url`. Both `|` and `----` separators must be recognized.
-- **Phone number**: Digits only, may include country code prefix. Example: `13103887887`
-- **SMS URL**: Full URL including token parameter. Example: `https://sms369.vip/api/sms/access?token=xxx`
+- **Phone number**: Digits only and may include a country-code prefix. Preserve the complete value only in process memory and mask it in output.
+- **SMS URL**: Full HTTP(S) URL including its complete query/token string. Preserve it only in process memory and mask it in output.
 - **Order number**: From "订单号" field.
 - **Validity**: From usage instructions, typically "有效期25-30天". Parse the upper bound (30 days) as default valid_until offset from order creation date.
 - **Quantity**: From "数量" field. Must match number of card entries parsed.
@@ -90,7 +90,7 @@ User may provide multiple direct-copy blocks and/or screenshots in one message. 
 After parsing, always present a structurally complete redacted preview. Include source mode (`direct_copy_text` and/or screenshot metadata), observed count, one masked row per item, missing fields, structural/quantity/type validation, and duplicate-check state. The unmasked values remain only in the current in-memory operation and the confirmed Feishu Base write; do not print them or persist them to local JSON/temp files.
 
 ```
-GPT 账号包（source: direct_copy_text + screenshot metadata）:
+GPT 账号包（source: <direct_copy_text|screenshot|direct_copy_text + screenshot metadata, exactly as used>）:
   订单: <masked-or-missing>; provider: <masked-or-missing>; stated quantity: <value-or-missing>
   observed count: 2; validation: <state>; duplicate check: <state>
   密码: ***
@@ -100,7 +100,7 @@ GPT 账号包（source: direct_copy_text + screenshot metadata）:
     1. e***@***
     2. a***@***
 
-手机卡包（source: direct_copy_text + screenshot metadata）:
+手机卡包（source: <direct_copy_text|screenshot|direct_copy_text + screenshot metadata, exactly as used>）:
   订单: <masked-or-missing>; order timestamp: <masked-or-missing>; stated quantity: <value-or-missing>
   observed count: 2; valid_until: <masked-or-unavailable>
   validation: <state>; duplicate check: <state>; type evidence: <state>
