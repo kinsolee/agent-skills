@@ -18,7 +18,7 @@
 - SIM pool rules: max 3 binds per number, 3-day cooldown after each bind, 25-30 day validity, 1-hour cooldown on recently-used rejection.
 - Feishu Base is the single source of truth; no local credential cache.
 - sub2api remark field is left empty; no credentials stored there.
-- HTML entity decoding required on all parsed strings from provider docs.
+- Standards-compliant HTML entity decoding is allowed only for strings proven to come from HTML text/source. Screenshot OCR strings stay raw and must not be reinterpreted as entities.
 - UI patterns must carry provenance and one of these evidence states: `screenshot_inferred`, `snapshot_verified`, or `live_verified`. Never present inferred behavior as live verified.
 
 ---
@@ -149,18 +149,14 @@ Rules derived from real provider delivery screenshots. Agent follows these when 
 3. If they differ, stop and ask the user to confirm the correct value. Do not guess or pick one.
 4. After extraction, echo the full structured result to the user and wait for explicit confirmation before writing to Feishu Base.
 
-## HTML Entity Decoding
+## HTML Entity Handling
 
-All strings extracted from screenshots or HTML-rendered pages must be decoded:
-- `&#26;` → `&`
-- `&#35;` → `#`
-- `&#33;` → `!`
-- `&amp;` → `&`
-- `&lt;` → `<`
-- `&gt;` → `>`
-- Any `&#NNN;` or `&#xHH;` pattern → corresponding Unicode character
+- Screenshot OCR is pixel-derived text. Preserve it exactly for the two independent visual reads; do not reinterpret an OCR fragment such as `&#26;` as an HTML entity.
+- Decode only when provenance proves the value came from HTML source/DOM text that still contains escaped entities.
+- Use a standards-compliant decoder. Examples: `&amp;` → `&`, `&#35;` → `#`, `&#33;` → `!`; numeric entities map to their actual Unicode code points.
+- `&#26;` does **not** mean `&`; it is Unicode control code U+001A. If a visual read produces it inside a password, treat it as suspicious OCR and rely on the independent visual comparison or user confirmation.
 
-Apply decoding before cross-validation comparison and before echoing to user.
+For screenshots, cross-validate raw visual reads first. For proven HTML-source strings, decode after capture and then cross-validate the decoded value before storage.
 
 ## GPT Account Pack Format
 
@@ -480,7 +476,7 @@ Read from `.env` file:
 
 1. **Dual visual model cross-validation**: Every password, key, URL, or token extracted from screenshots must be read by two visual models independently. Adopt only if both agree. If they disagree, ask the user.
 2. **Echo before write**: After parsing provider docs, echo the full structured result to the user. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
-3. **HTML entity decode**: Decode all HTML entities in parsed strings before comparison or storage.
+3. **HTML entity provenance**: Keep screenshot OCR raw. Decode entities only for values proven to come from HTML source/DOM text, using standards-compliant decoding.
 4. **Redact in output**: Never show full passwords, tokens, or MFA secrets in commentary or final output. Use `***` masking.
 5. **No local credential cache**: Feishu Base is the single source of truth.
 6. **sub2api remark field**: Leave empty. Do not store credentials there.
