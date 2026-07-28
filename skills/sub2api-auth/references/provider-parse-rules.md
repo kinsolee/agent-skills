@@ -7,7 +7,7 @@ Rules derived from real provider delivery screenshots. Agent follows these when 
 1. For every password, secret key, URL, or token string extracted from a screenshot, run two independent visual model reads.
 2. If both reads produce identical strings, adopt the result.
 3. If they differ, stop and ask the user to confirm the correct value. Do not guess or pick one.
-4. After extraction, echo the full structured result to the user and wait for explicit confirmation before writing to Feishu Base.
+4. After extraction, echo a structurally complete but redacted preview to the user and wait for explicit confirmation before writing to Feishu Base. Preserve counts, provider/order provenance, and one row per parsed item, but mask passwords, tokens, MFA material, full email addresses, full phone numbers, and secret-bearing URLs.
 
 ## HTML Entity Handling
 
@@ -61,21 +61,21 @@ User may provide multiple screenshots in one message (e.g., one GPT pack + one S
 
 ## Echo Format
 
-After parsing, present to user in this format:
+After parsing, present a redacted preview to the user in this format. The unmasked values remain only in the current in-memory operation and the confirmed Feishu Base write; do not print them or persist them to local JSON/temp files.
 
 ```
 GPT 账号包（订单 XXXXX，provider: XXX）:
-  密码: XXXX
-  MFA 平台: XXXX
-  邮箱助手: XXXX（如有）
+  密码: ***
+  MFA 平台: https://2fa.example/（不含密钥时可显示域名；secret-bearing URL 用 ***）
+  邮箱助手: https://email.example/（如有，不含密钥时可显示域名）
   账号列表:
-    1. email1@example.com
-    2. email2@example.com
+    1. e***1@example.com
+    2. e***2@example.com
     ...
 
 手机卡包（订单 XXXXX）:
-  1. 13103887887 → https://sms369.vip/...
-  2. 13104246503 → https://sms369.vip/...
+  1. 131****7887 → https://sms369.vip/...token=***
+  2. 131****6503 → https://sms369.vip/...token=***
   ...
 
 确认写入飞书 Base？

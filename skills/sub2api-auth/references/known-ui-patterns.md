@@ -13,15 +13,16 @@ This is a provenance-aware reference library, not a claim of current live valida
 
 For every pattern below:
 
-1. Create or select one named task space with `useOrCreateTaskSpace(...)`, retain its returned numeric ID, and reuse that same task space across all heredoc rounds for the operation.
+1. Create or select one non-sensitive named task space with `useOrCreateTaskSpace(...)`, retain its returned numeric ID in the running task context, and reuse that same ID across all heredoc rounds. Do not put a full email, phone number, password, token, or secret-bearing URL in the task-space name.
 2. Use the semantic workflow (`snapshotText()` plus current refs or locators) first for these normal forms. Observe, act, then verify with a fresh `snapshotText()`, `pageInfo()`, or other reliable readback after each meaningful action.
 3. A snapshot ref such as `@12` is valid only when it appears in the latest `snapshotText()` output. Take a fresh snapshot before selecting a ref; never reuse a ref from an older snapshot. Prefer a current `loc=...` or stable CSS selector when appropriate.
-4. For a handoff initiated by the agent or an unexpected user takeover: stop; after explicit user confirmation, resume with `takeOverTaskSpace(task.id)`.
-5. For inactive, unassigned, or user-owned spaces: stop; after explicit user confirmation, `listTaskSpaces()`, `claimTaskSpace(id)`, `listTabs()`, then `switchTab(targetId)` before acting.
-6. Never auto-take over or auto-claim without explicit confirmation. Do not retry or route around a user-control or ownership error.
-7. If manual login, CAPTCHA, or another user-only step is required, call `handOffTaskSpace(task.id)`, check that the result reports `done: true`, and explain the required action.
-8. After a prior heredoc has verified that the whole task is complete, run `completeTaskSpace(task.id, { keep: false })` in its own dedicated final heredoc. Use `keep: true` only for a concrete user-requested or manual-action reason.
-9. Never print or persist passwords, authorization secrets, or full token-bearing URLs. Redact credentials and show token URLs only with `token=xxx`.
+4. An ordinary later heredoc starts with `useOrCreateTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`. The JavaScript variable from a prior heredoc does not survive.
+5. For a handoff initiated by the agent or an unexpected user takeover: stop; after explicit user confirmation, start the next heredoc with `takeOverTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`.
+6. For inactive, unassigned, or user-owned spaces: stop; after explicit user confirmation, `listTaskSpaces()`, `claimTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, `listTabs()`, then `switchTab(targetId)` before acting.
+7. Never auto-take over or auto-claim without explicit confirmation. Do not retry or route around a user-control or ownership error.
+8. If manual login, CAPTCHA, or another user-only step is required, call `handOffTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, check that the result reports `done: true`, and explain the required action.
+9. After a prior heredoc has verified that the whole task is complete, run `completeTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>, { keep: false })` in its own dedicated final heredoc. Check `done: true`; use `keep: true` only for a concrete user-requested or manual-action reason.
+10. Never print or persist passwords, authorization secrets, or full token-bearing URLs. Redact credentials and show token URLs only with `token=xxx`.
 
 ## sub2api Admin — Login
 

@@ -147,7 +147,7 @@ Rules derived from real provider delivery screenshots. Agent follows these when 
 1. For every password, secret key, URL, or token string extracted from a screenshot, run two independent visual model reads.
 2. If both reads produce identical strings, adopt the result.
 3. If they differ, stop and ask the user to confirm the correct value. Do not guess or pick one.
-4. After extraction, echo the full structured result to the user and wait for explicit confirmation before writing to Feishu Base.
+4. After extraction, echo a structurally complete but redacted preview to the user and wait for explicit confirmation before writing to Feishu Base. Preserve counts and provider/order provenance, but mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs.
 
 ## HTML Entity Handling
 
@@ -201,21 +201,21 @@ User may provide multiple screenshots in one message (e.g., one GPT pack + one S
 
 ## Echo Format
 
-After parsing, present to user in this format:
+After parsing, present a redacted preview to the user in this format. Keep exact values out of output and local files:
 
 ```
 GPT 账号包（订单 XXXXX，provider: XXX）:
-  密码: XXXX
-  MFA 平台: XXXX
-  邮箱助手: XXXX（如有）
+  密码: ***
+  MFA 平台: https://2fa.example/（secret-bearing URL 用 ***）
+  邮箱助手: https://email.example/（如有）
   账号列表:
-    1. email1@example.com
-    2. email2@example.com
+    1. e***1@example.com
+    2. e***2@example.com
     ...
 
 手机卡包（订单 XXXXX）:
-  1. 13103887887 → https://sms369.vip/...
-  2. 13104246503 → https://sms369.vip/...
+  1. 131****7887 → https://sms369.vip/...token=***
+  2. 131****6503 → https://sms369.vip/...token=***
   ...
 
 确认写入飞书 Base？
@@ -507,7 +507,7 @@ Read from `.env` file:
 ## Hard Rules
 
 1. **Dual visual model cross-validation**: Every password, key, URL, or token extracted from screenshots must be read by two visual models independently. Adopt only if both agree. If they disagree, ask the user.
-2. **Echo before write**: After parsing provider docs, echo the full structured result to the user. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
+2. **Redacted echo before write**: After parsing provider docs, echo a structurally complete preview with counts and one masked row per parsed item. Mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
 3. **HTML entity provenance**: Keep screenshot OCR raw. Decode entities only for values proven to come from HTML source/DOM text, using standards-compliant decoding.
 4. **Redact in output**: Never show full passwords, tokens, or MFA secrets in commentary or final output. Use `***` masking.
 5. **No local credential cache**: Feishu Base is the single source of truth.
@@ -515,6 +515,8 @@ Read from `.env` file:
 7. **ego-browser task space isolation**: Each account authorization uses its own task space. Complete it when done.
 8. **Observe-act-verify loop**: Every browser action follows: snapshotText/screenshot → reason → act → snapshotText/screenshot to verify.
 9. **Check known-ui-patterns.md first**: Read the evidence status before using a pattern. Treat `screenshot_inferred` as a hypothesis, `snapshot_verified` as observed structure only, and `live_verified` as a completed path. After successful live observation or end-to-end completion, update provenance and promote the status only to the level actually proven.
+10. **Sensitive Base reads stay silent**: Use `--field-id` projections for only the fields needed by the current step. Capture credential-bearing JSON into a process-local variable and do not let the raw row reach stdout, `cliLog`, commentary, or final output. Do not persist it to local JSON/temp files.
+11. **Exact browser ownership branches**: Ordinary later rounds start with `useOrCreateTaskSpace(<numeric-id>)`. After a confirmed handoff or unexpected takeover, resume with `takeOverTaskSpace(<numeric-id>)`. For a confirmed inactive, unassigned, or user-owned space, use `listTaskSpaces()`, `claimTaskSpace(id)`, `listTabs()`, then `switchTab(targetId)`. A user-control error is a hard stop until explicit confirmation.
 
 ## Flow A: Provider Document Parsing
 
@@ -528,13 +530,15 @@ See `references/provider-parse-rules.md` for detailed parsing rules.
 2. For each screenshot, identify pack type: GPT account pack or SIM card pack.
 3. Extract structured data following provider-parse-rules.md.
 4. Run dual visual model cross-validation on all critical strings (passwords, URLs, tokens).
-5. Echo structured result to user in the format specified in provider-parse-rules.md.
+5. Echo the redacted structured preview specified in provider-parse-rules.md. Keep exact parsed values out of output.
 6. Wait for user confirmation.
 7. On confirmation, write to Feishu Base:
-   - GPT accounts: `lark-cli base +record-batch-create --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_GPT_ACCOUNTS --records '<json>' --as user`
-   - SIM cards: `lark-cli base +record-batch-create --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_SIM_CARDS --records '<json>' --as user`
+   - GPT accounts: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --json '{"fields":["email","password","source_order","source_provider","mfa_platform_url","mfa_platform_type","email_helper_url","sub2api_status"],"rows":[["<email>","<password>","<order>","<provider>","<mfa-url>","<网页-or-API>","<email-helper-or-null>","pending"]]}' --as user`
+   - SIM cards: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --json '{"fields":["phone_number","sms_url","sms_type","source_order","bound_accounts","bind_count","cooldown_until","valid_until","status"],"rows":[["<phone>","<sms-url>","<网页-or-API-or-unknown>","<order>","",0,null,"<YYYY-MM-DD HH:mm:ss>","available"]]}' --as user`
+   - Batch payloads always use the current `{"fields":[...],"rows":[...]}` shape. Keep row order aligned with `fields`, use `null` for empty cells, and split batches above 200 rows.
    - Set `sub2api_status` to `pending` for new GPT accounts.
    - Set `status` to `available`, `bind_count` to 0, `valid_until` to order_date + 30 days for new SIM cards.
+   - All Base datetime CellValues use `YYYY-MM-DD HH:mm:ss`.
 8. Report to user: "X accounts and Y SIM cards written to Feishu Base. Ready to authorize?"
 
 ## Flow B: New Account Authorization
@@ -547,16 +551,23 @@ For each account with `sub2api_status=pending` (or user-specified emails):
 
 1. **Read credentials from Feishu Base**:
    ```bash
-   lark-cli base +record-search --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_GPT_ACCOUNTS --filter '{"conjunction":"and","conditions":[{"field_name":"email","operator":"is","value":["<email>"]}]}' --as user
+   ACCOUNT_JSON="$(
+     lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" \
+       --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' \
+       --field-id email --field-id password --field-id mfa_platform_url --field-id email_helper_url \
+       --field-id bound_phone --field-id sub2api_status --limit 2 --format json --as user
+   )"
    ```
+   Keep `ACCOUNT_JSON` process-local and do not print it. Require exactly one match, retain the returned GPT `record_id`, and use that exact ID for every later update. If zero or multiple rows match, stop instead of guessing.
 
 2. **Create ego-browser task space**:
    ```
    ego-browser nodejs <<'EOF'
-   const task = await useOrCreateTaskSpace('auth <email>')
-   cliLog('task space id: ' + task.id)
+   const task = await useOrCreateTaskSpace('sub2api auth account-<batch-index>')
+   cliLog(JSON.stringify({ taskSpaceId: task.id }))
    EOF
    ```
+   Persist the returned numeric `taskSpaceId` in the running task context and reuse it for every later heredoc. An ordinary later heredoc begins with `useOrCreateTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`. Task-space names must not contain a full email address, password, token, or secret-bearing URL.
 
 3. **Login to sub2api and generate auth URL**:
    Follow `references/known-ui-patterns.md` → "sub2api Admin — Login" and "sub2api Admin — Generate Auth URL".
@@ -584,32 +595,45 @@ For each account with `sub2api_status=pending` (or user-specified emails):
      Extract callback URL, proceed to step 7.
 
    - **Unknown page**:
-     `captureScreenshot()`, analyze with visual model, attempt to proceed. If stuck after 2 attempts, `handOffTaskSpace` and ask user for help.
+     `captureScreenshot()`, analyze with visual model, attempt to proceed. If stuck after 2 attempts, call `handOffTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, emit only the returned `{done, skipped}` state, and ask the user for help only when `done === true`. If handoff is skipped, report the ownership state without claiming control was transferred.
+
+   - **User-control or ownership error**:
+     Stop the whole browser task immediately. Do not retry, open an alternate task space, or continue through another browser. Resume only after explicit user confirmation, using the exact ownership branch in Hard Rule 11.
 
 6. **Phone binding** (if required):
    Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Phone Binding".
    SIM pool selection logic:
-   - Query available SIM cards from Feishu Base
-   - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available`
-   - Filter: status=available, valid_until > now, cooldown_until < now, bind_count < 3
+   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout
+   - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available` with `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '{"status":"available"}' --as user`, then read back the record
+   - Mark records with `bind_count >= 3` as `exhausted` and expired records as `expired` with the same complete command shape, their real `record_id`, and the appropriate status field map, then read them back
+   - Filter: status=available, valid_until > now, cooldown_until is empty or <= now, bind_count < 3
    - Exclude phones already tried this round
    - Sort by bind_count ascending, pick first
    - If none available: mark account `manual_required`, skip to step 8
 
 7. **Fill callback URL in sub2api**:
    Follow `references/known-ui-patterns.md` → "sub2api Admin — Fill Callback URL".
+   Before any success write to Feishu Base, read the account back in sub2api, require Active/normal status, and verify the remark is empty. If either check fails or is ambiguous, do not mark the Base account active.
 
 8. **Update Feishu Base**:
-   - Success: update `sub2api_status` to `active`, set `auth_time`, set `bound_phone`
-   - Update SIM card: increment `bind_count`, set `last_bind_time`, set `cooldown_until` = now + 3 days, append email to `bound_accounts`
-   - Failure: update `sub2api_status` to `failed` or `manual_required`, append error to `notes`
+   - GPT update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --record-id "<gpt-record-id>" --json '<field-map>' --as user`.
+   - SIM update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '<field-map>' --as user`.
+   - `+record-upsert` without `--record-id` creates a new row and must not be used for updates.
+   - Success: update the GPT record to `sub2api_status=active`, `auth_time=<YYYY-MM-DD HH:mm:ss>`, and `bound_phone=<phone>`.
+   - Successful phone binding: re-read the exact SIM record, compute the complete field map from those observed values, perform one `+record-upsert`, then read back. Increment `bind_count`, set `last_bind_time=<YYYY-MM-DD HH:mm:ss>`, set `cooldown_until=<now + 3 days>` in the same format, append the email to `bound_accounts`, and set `status=cooldown` unless the new bind count is 3, in which case set `status=exhausted`. Do not claim concurrency-safe atomic increment.
+   - "Recently used" rejection: update only `status=cooldown`, `cooldown_until=<now + 1 hour>`, and the diagnostic note. Do not increment `bind_count`, `last_bind_time`, or `bound_accounts`.
+   - Failure: update the GPT record to `sub2api_status=failed` or `manual_required` and append a redacted error to `notes`.
+   - Read back every updated record with a projected `+record-list --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' --limit 2` or the corresponding phone-number filter before continuing. Require exactly one match and do not project password or secret-bearing URL fields.
 
 9. **Complete task space**:
+   Run this as its own dedicated final heredoc only after a prior heredoc has verified that the browser portion is genuinely complete. Use the numeric ID retained from step 2; the `task` variable does not survive between heredocs.
    ```
    ego-browser nodejs <<'EOF'
-   await completeTaskSpace(task.id, { keep: false })
+   const result = await completeTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>, { keep: false })
+   cliLog(JSON.stringify(result))
    EOF
    ```
+   Confirm `result.done === true` before reporting cleanup as complete.
 
 10. **Report progress** to user after each account.
 
@@ -620,9 +644,9 @@ After all accounts processed, present summary:
 ```
 Authorization Summary
 =====================
-OK    email1@example.com    active
-FAIL  email2@example.com    manual_required (no SIM available)
-OK    email3@example.com    active
+OK    e***1@example.com    active
+FAIL  e***2@example.com    manual_required (no SIM available)
+OK    e***3@example.com    active
 
 Total: 3, success: 2, manual_required: 1
 ```
@@ -634,7 +658,7 @@ Triggered when user says "重新授权", "check revoked", "reauth", or provides 
 1. Query Feishu Base for accounts with `sub2api_status=revoked` (or specified emails).
 2. For each account, follow Flow B steps 1-10.
 3. If the account's original `bound_phone` is still available (not in cooldown/expired/unavailable), try reusing it first. Otherwise pick from SIM pool.
-4. On success, update `sub2api_status` to `active`, set `last_reauth_time`.
+4. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
 
 ## Flow D: Ban Status Check
 
@@ -660,11 +684,13 @@ cd skills/sub2api-auth && node check_all_ban_status.mjs
 | Cloudflare challenge blocks OpenAI login | Wait 30s with periodic snapshotText; if stuck, handOffTaskSpace for user to solve |
 | MFA platform unreachable | Fallback to email helper; if both fail, mark manual_required |
 | SMS platform unreachable | Mark SIM unavailable, try next number |
-| Phone rejected by OpenAI | Mark SIM `cooldown` for 1 hour, try next number (max 3 retries) |
+| Exact OpenAI "recently used" rejection | Set SIM `status=cooldown` and `cooldown_until=now+1 hour`; leave `bind_count`, `last_bind_time`, and `bound_accounts` unchanged; read back, then try the next number (max 3 verified numbers) |
+| Other phone rejection | Handle only according to the observed response; if no evidence-backed transition exists, keep binding fields unchanged and mark the account `manual_required` |
 | No SIM cards available | Mark account manual_required |
 | Feishu Base API error | Report to user, do not proceed (no local cache) |
 | Unknown OpenAI UI | Screenshot + visual model analysis; attempt operation; handoff if stuck |
-| ego-browser "user is controlling" | Stop, ask user to confirm continue, then takeOverTaskSpace |
+| ego-browser "user is controlling" after handoff/takeover | Stop the whole task; after explicit confirmation start with `takeOverTaskSpace(<id>)` |
+| ego-browser task space inactive/unassigned/user-owned | Stop the whole task; after explicit confirmation list spaces, `claimTaskSpace(<id>)`, list tabs, and switch to the exact target tab |
 | Password wrong | Mark account failed, record error in notes |
 
 ## Known UI Patterns
@@ -772,15 +798,18 @@ git commit -m "chore: update env template and remove camofox dependency"
 - [ ] **Step 1: Verify Feishu Base has test data**
 
 ```bash
-lark-cli base +record-list --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_GPT_ACCOUNTS --as user
-lark-cli base +record-list --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_SIM_CARDS --as user
+lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" \
+  --field-id email --field-id sub2api_status --limit 200 --format json --as user
+lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" \
+  --field-id phone_number --field-id status --field-id bind_count --field-id cooldown_until --field-id valid_until \
+  --limit 200 --format json --as user
 ```
 
-Expected: At least one pending account and one available SIM card.
+Expected: At least one pending account and one currently eligible SIM card. Redact email/phone values in any report; no password, MFA URL, or SMS URL is read in this preflight.
 
 - [ ] **Step 2: Execute Flow B for one account**
 
-Follow SKILL.md Flow B step by step for the first pending account. At each step:
+Follow SKILL.md Flow B step by step for the first pending account, but defer Flow B task-space cleanup until after this task's sub2api verification step. At each step:
 
 1. Run the ego-browser heredoc.
 2. Observe the result (snapshotText / screenshot).
@@ -798,22 +827,40 @@ For every platform touched, update the pattern provenance with the exact date:
 - [ ] **Step 4: Verify Feishu Base state after authorization**
 
 ```bash
-lark-cli base +record-search --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_GPT_ACCOUNTS --filter '{"conjunction":"and","conditions":[{"field_name":"email","operator":"is","value":["<test-email>"]}]}' --as user
+lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" \
+  --filter-json '{"logic":"and","conditions":[["email","==","<test-email>"]]}' \
+  --field-id email --field-id sub2api_status --field-id auth_time --field-id bound_phone \
+  --limit 2 --format json --as user
 ```
 
 Expected: `sub2api_status` = `active`, `auth_time` is set, `bound_phone` is set.
 
 ```bash
-lark-cli base +record-search --base-token $FEISHU_BASE_APP_TOKEN --table-id $FEISHU_TABLE_SIM_CARDS --filter '{"conjunction":"and","conditions":[{"field_name":"phone_number","operator":"is","value":["<used-phone>"]}]}' --as user
+lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" \
+  --filter-json '{"logic":"and","conditions":[["phone_number","==","<used-phone>"]]}' \
+  --field-id phone_number --field-id bind_count --field-id last_bind_time --field-id cooldown_until \
+  --field-id bound_accounts --field-id status --limit 2 --format json --as user
 ```
 
 Expected: `bind_count` incremented, `last_bind_time` set, `cooldown_until` set, `bound_accounts` contains the email.
 
-- [ ] **Step 5: Verify sub2api shows the account as active**
+If and only if the real E2E run actually encounters the exact "recently used" response, read back that same SIM record and verify:
 
-Open sub2api admin in ego-browser, search for the account email, confirm status is Active/normal.
+- `status=cooldown`
+- `cooldown_until` is exactly one hour after the observed rejection time in `YYYY-MM-DD HH:mm:ss`
+- `bind_count`, `last_bind_time`, and `bound_accounts` are unchanged
 
-- [ ] **Step 6: Commit any pattern updates**
+Do not synthesize or force this rejection branch for testing.
+
+- [ ] **Step 5: Verify sub2api shows the account as active and remark remains empty**
+
+In the still-open task space, search for the account email and confirm status is Active/normal. Verify the sub2api remark field is empty. Do not log the email, authorization URL, callback URL, or any credential.
+
+- [ ] **Step 6: Complete the ego-browser task space**
+
+After Step 5 readback, run the dedicated final `completeTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>, { keep: false })` heredoc and confirm `done: true`.
+
+- [ ] **Step 7: Commit any pattern updates**
 
 ```bash
 git add skills/sub2api-auth/references/known-ui-patterns.md
