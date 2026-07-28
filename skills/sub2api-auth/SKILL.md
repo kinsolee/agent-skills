@@ -1,6 +1,6 @@
 ---
 name: sub2api-auth
-description: Use when adding OpenAI OAuth accounts to sub2api, re-authorizing revoked or 401 accounts, or batch authorizing accounts from a file
+description: Use when adding OpenAI OAuth accounts to sub2api, re-authorizing revoked accounts, parsing provider delivery docs, or managing SIM card pool for phone verification
 triggers:
   - sub2api
   - oauth授权
@@ -11,154 +11,248 @@ triggers:
   - 账号授权
   - token revoked
   - 401
+  - 添加gpt账号
+  - 接码
+  - 手机号绑定
+  - MFA验证码
+  - provider文档
+  - 卡密
 tags:
   - sub2api
   - openai
   - oauth
   - automation
   - auth
+  - ego-browser
+  - feishu-base
 ---
 
-# sub2api OpenAI OAuth Account Automation
+# sub2api OpenAI OAuth — Agent Playbook
 
-Automate the full lifecycle of OpenAI OAuth accounts in sub2api: batch authorization and revoked account re-authorization.
+Agent-driven automation for the full lifecycle of OpenAI OAuth accounts in sub2api. Uses ego-browser for all browser operations, Feishu Base for persistence, and visual models for page understanding.
 
 ## Prerequisites
 
-- Node.js >= 18
-- Run `npm install` to install dependencies (playwright, camofox-browser)
-- Run `npx playwright install chromium` for Playwright browser
-- camofox-browser server auto-starts on port 9377 if not already running
-- sub2api admin credentials (email/password)
+- ego-browser (ego-lite) installed and running
+- lark-cli configured with Feishu authentication
+- Feishu Base "sub2api-auth" with tables `gpt_accounts` and `sim_cards` (see .env for tokens)
+- sub2api admin URL accessible from ego-browser
+
+## Configuration
+
+Read from `.env` file:
+
+| Variable | Purpose |
+|----------|---------|
+| `FEISHU_BASE_APP_TOKEN` | Feishu Base app_token |
+| `FEISHU_TABLE_GPT_ACCOUNTS` | gpt_accounts table_id |
+| `FEISHU_TABLE_SIM_CARDS` | sim_cards table_id |
+| `SUB2API_ADMIN_URL` | sub2api admin page URL |
 
 ## When to Use
 
-- User wants to add OpenAI OAuth accounts to sub2api admin panel
+- User provides provider delivery screenshots or text (GPT account packs, SIM card packs)
+- User wants to add/authorize OpenAI OAuth accounts to sub2api
 - User mentions revoked, 401, or error accounts need re-authorization
-- User has an accounts file and wants batch authorization
-- User says keywords like: "sub2api", "oauth授权", "openai授权", "重新授权", "批量添加"
+- User says keywords: "sub2api", "oauth授权", "添加账号", "重新授权", "接码", "MFA"
 
-## Quick Reference
+## Hard Rules
 
-| Command | Purpose |
-|---------|---------|
-| `--accounts <file>` | Batch authorize from accounts file |
-| `--check-revoked` | Scan all accounts and re-authorize revoked ones |
-| custom `check_all_ban_status.mjs` | Read-only scan of current sub2api account list and ban.nloop token status; parse structured API `results[].status` |
-| `--one <line>` | Authorize a single account |
+1. **Dual visual model cross-validation**: Every password, key, URL, or token extracted from screenshots must be read by two visual models independently. Adopt only if both agree. If they disagree, ask the user.
+2. **Redacted echo before write**: After parsing provider docs, echo a structurally complete preview with counts and one masked row per parsed item. Mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
+3. **HTML entity provenance**: Keep screenshot OCR raw. Decode entities only for values proven to come from HTML source/DOM text, using standards-compliant decoding.
+4. **Redact in output**: Never show full passwords, tokens, or MFA secrets in commentary or final output. Use `***` masking.
+5. **No local credential cache**: Feishu Base is the single source of truth.
+6. **sub2api remark field**: Leave empty. Do not store credentials there.
+7. **ego-browser task space isolation**: Each account authorization uses its own task space. Complete it when done.
+8. **Observe-act-verify loop**: Every browser action follows: snapshotText/screenshot → reason → act → snapshotText/screenshot to verify.
+9. **Check known-ui-patterns.md first**: Read the evidence status before using a pattern. Treat `screenshot_inferred` as a hypothesis, `snapshot_verified` as observed structure only, and `live_verified` as a completed path. After successful live observation or end-to-end completion, update provenance and promote the status only to the level actually proven.
+10. **Sensitive Base reads stay silent**: Use `--field-id` projections for only the fields needed by the current step. Capture credential-bearing JSON into a process-local variable and do not let the raw row reach stdout, `cliLog`, commentary, or final output. Do not persist it to local JSON/temp files.
+11. **Exact browser ownership branches**: Ordinary later rounds start with `useOrCreateTaskSpace(<numeric-id>)`. After a confirmed handoff or unexpected takeover, resume with `takeOverTaskSpace(<numeric-id>)`. For a confirmed inactive, unassigned, or user-owned space, use `listTaskSpaces()`, `claimTaskSpace(id)`, `listTabs()`, then `switchTab(targetId)`. A user-control error is a hard stop until explicit confirmation.
+
+## Flow A: Provider Document Parsing
+
+Triggered when user provides screenshots or text of provider delivery pages.
+
+See `references/provider-parse-rules.md` for detailed parsing rules.
+
+### Steps
+
+1. Receive screenshots/text from user.
+2. For each screenshot, identify pack type: GPT account pack or SIM card pack.
+3. Extract structured data following provider-parse-rules.md.
+4. Run dual visual model cross-validation on all critical strings (passwords, URLs, tokens).
+5. Echo the redacted structured preview specified in provider-parse-rules.md. Keep exact parsed values out of output.
+6. Wait for user confirmation.
+7. On confirmation, write to Feishu Base:
+   - GPT accounts: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --json '{"fields":["email","password","source_order","source_provider","mfa_platform_url","mfa_platform_type","email_helper_url","sub2api_status"],"rows":[["<email>","<password>","<order>","<provider>","<mfa-url>","<网页-or-API>","<email-helper-or-null>","pending"]]}' --as user`
+   - SIM cards: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --json '{"fields":["phone_number","sms_url","sms_type","source_order","bound_accounts","bind_count","cooldown_until","valid_until","status"],"rows":[["<phone>","<sms-url>","<网页-or-API-or-unknown>","<order>","",0,null,"<YYYY-MM-DD HH:mm:ss>","available"]]}' --as user`
+   - Batch payloads always use the current `{"fields":[...],"rows":[...]}` shape. Keep row order aligned with `fields`, use `null` for empty cells, and split batches above 200 rows.
+   - Set `sub2api_status` to `pending` for new GPT accounts.
+   - Set `status` to `available`, `bind_count` to 0, `valid_until` to order_date + 30 days for new SIM cards.
+   - All Base datetime CellValues use `YYYY-MM-DD HH:mm:ss`.
+8. Report to user: "X accounts and Y SIM cards written to Feishu Base. Ready to authorize?"
+
+## Flow B: New Account Authorization
+
+Triggered when user says "authorize", "授权", "开始授权", or confirms after Flow A.
+
+### Per-Account Steps
+
+For each account with `sub2api_status=pending` (or user-specified emails):
+
+1. **Read credentials from Feishu Base**:
+   ```bash
+   ACCOUNT_JSON="$(
+     lark-cli base +record-list --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" \
+       --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' \
+       --field-id email --field-id password --field-id mfa_platform_url --field-id email_helper_url \
+       --field-id bound_phone --field-id sub2api_status --limit 2 --format json --as user
+   )"
+   ```
+   Keep `ACCOUNT_JSON` process-local and do not print it. Require exactly one match, retain the returned GPT `record_id`, and use that exact ID for every later update. If zero or multiple rows match, stop instead of guessing.
+
+2. **Create ego-browser task space**:
+   ```
+   ego-browser nodejs <<'EOF'
+   const task = await useOrCreateTaskSpace('sub2api auth account-<batch-index>')
+   cliLog(JSON.stringify({ taskSpaceId: task.id }))
+   EOF
+   ```
+   Persist the returned numeric `taskSpaceId` in the running task context and reuse it for every later heredoc. An ordinary later heredoc begins with `useOrCreateTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`. Task-space names must not contain a full email address, password, token, or secret-bearing URL.
+
+3. **Login to sub2api and generate auth URL**:
+   Follow `references/known-ui-patterns.md` → "sub2api Admin — Login" and "sub2api Admin — Generate Auth URL".
+   If ego-browser inherits user session, login may be skipped.
+
+4. **Open auth URL and login to OpenAI**:
+   Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Login Page".
+
+5. **Handle verification** (observe-act-verify):
+   After password submission, `snapshotText()` to determine what OpenAI requires:
+
+   - **MFA code page** (code input visible + account has mfa_platform_url):
+     Follow `references/known-ui-patterns.md` → "OpenAI OAuth — MFA Verification".
+
+   - **Email verification page** (fallback when MFA unavailable):
+     Open email helper URL in new tab, import account email, poll for 6-digit code, fill in OpenAI tab.
+
+   - **Phone binding page** (phone number input or "Check your phone" text):
+     Follow Flow B step 6 below.
+
+   - **Consent page** (Continue/Allow/Authorize button):
+     Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Consent Page".
+
+   - **Callback redirect** (URL is localhost/127.0.0.1):
+     Extract callback URL, proceed to step 7.
+
+   - **Unknown page**:
+     `captureScreenshot()`, analyze with visual model, attempt to proceed. If stuck after 2 attempts, call `handOffTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, emit only the returned `{done, skipped}` state, and ask the user for help only when `done === true`. If handoff is skipped, report the ownership state without claiming control was transferred.
+
+   - **User-control or ownership error**:
+     Stop the whole browser task immediately. Do not retry, open an alternate task space, or continue through another browser. Resume only after explicit user confirmation, using the exact ownership branch in Hard Rule 11.
+
+6. **Phone binding** (if required):
+   Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Phone Binding".
+   SIM pool selection logic:
+   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout
+   - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available` with `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '{"status":"available"}' --as user`, then read back the record
+   - Mark records with `bind_count >= 3` as `exhausted` and expired records as `expired` with the same complete command shape, their real `record_id`, and the appropriate status field map, then read them back
+   - Filter: status=available, valid_until > now, cooldown_until is empty or <= now, bind_count < 3
+   - Exclude phones already tried this round
+   - Sort by bind_count ascending, pick first
+   - If none available: mark account `manual_required`, skip to step 8
+
+7. **Fill callback URL in sub2api**:
+   Follow `references/known-ui-patterns.md` → "sub2api Admin — Fill Callback URL".
+   Before any success write to Feishu Base, read the account back in sub2api, require Active/normal status, and verify the remark is empty. If either check fails or is ambiguous, do not mark the Base account active.
+
+8. **Update Feishu Base**:
+   - GPT update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --record-id "<gpt-record-id>" --json '<field-map>' --as user`.
+   - SIM update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '<field-map>' --as user`.
+   - `+record-upsert` without `--record-id` creates a new row and must not be used for updates.
+   - Success: update the GPT record to `sub2api_status=active`, `auth_time=<YYYY-MM-DD HH:mm:ss>`, and `bound_phone=<phone>`.
+   - Successful phone binding: re-read the exact SIM record, compute the complete field map from those observed values, perform one `+record-upsert`, then read back. Increment `bind_count`, set `last_bind_time=<YYYY-MM-DD HH:mm:ss>`, set `cooldown_until=<now + 3 days>` in the same format, append the email to `bound_accounts`, and set `status=cooldown` unless the new bind count is 3, in which case set `status=exhausted`. Do not claim concurrency-safe atomic increment.
+   - "Recently used" rejection: update only `status=cooldown`, `cooldown_until=<now + 1 hour>`, and the diagnostic note. Do not increment `bind_count`, `last_bind_time`, or `bound_accounts`.
+   - Failure: update the GPT record to `sub2api_status=failed` or `manual_required` and append a redacted error to `notes`.
+   - Read back every updated record with a projected `+record-list --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' --limit 2` or the corresponding phone-number filter before continuing. Require exactly one match and do not project password or secret-bearing URL fields.
+
+9. **Complete task space**:
+   Run this as its own dedicated final heredoc only after a prior heredoc has verified that the browser portion is genuinely complete. Use the numeric ID retained from step 2; the `task` variable does not survive between heredocs.
+   ```
+   ego-browser nodejs <<'EOF'
+   const result = await completeTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>, { keep: false })
+   cliLog(JSON.stringify(result))
+   EOF
+   ```
+   Confirm `result.done === true` before reporting cleanup as complete.
+
+10. **Report progress** to user after each account.
+
+### Summary
+
+After all accounts processed, present summary:
+
+```
+Authorization Summary
+=====================
+OK    e***1@example.com    active
+FAIL  e***2@example.com    manual_required (no SIM available)
+OK    e***3@example.com    active
+
+Total: 3, success: 2, manual_required: 1
+```
+
+## Flow C: Re-authorization
+
+Triggered when user says "重新授权", "check revoked", "reauth", or provides specific emails.
+
+1. Query Feishu Base for accounts with `sub2api_status=revoked` (or specified emails).
+2. For each account, follow Flow B steps 1-10.
+3. If the account's original `bound_phone` is still available (not in cooldown/expired/unavailable), try reusing it first. Otherwise pick from SIM pool.
+4. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
+
+## Flow D: Ban Status Check
+
+Use the preserved `check_all_ban_status.mjs` script for read-only scanning. This script is independent of the playbook and runs via Node.js.
 
 ```bash
-# Batch authorize
-node src/authorize-openai-oauth.mjs \
-  --accounts accounts.txt \
-  --admin-email <email> --admin-password <password>
-
-# Re-authorize revoked accounts (no accounts.txt needed)
-node src/authorize-openai-oauth.mjs \
-  --check-revoked \
-  --admin-email <email> --admin-password <password>
-
-# Check current account disabled/banned status only (no reauth)
-node check_all_ban_status.mjs
-
-# Single account
-node src/authorize-openai-oauth.mjs \
-  --one "email ---- password ---- Plan ---- token" \
-  --admin-email <email> --admin-password <password>
+cd skills/sub2api-auth && node check_all_ban_status.mjs
 ```
 
-## Key Options
+## SIM Pool Rules
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--admin-email` | sub2api admin email | env `SUB2API_ADMIN_EMAIL` |
-| `--admin-password` | sub2api admin password | env `SUB2API_ADMIN_PASSWORD` |
-| `--admin-url` | Admin page URL | `http://<ego-browser-host>:8080/admin/accounts` |
-| `--headless` | Run browser headless | false |
-| `--debug` | Verbose logging | false |
-| `--timeout <ms>` | Per-account timeout | 480000 |
+- Max 3 bindings per phone number (`bind_count < 3`).
+- 3-day cooldown after each successful bind (`cooldown_until = last_bind_time + 3 days`).
+- 25-30 day validity from purchase (`valid_until`). Expired cards get `status=expired`.
+- On "recently used" rejection: `status=cooldown`, `cooldown_until = now + 1 hour`. A later selection pass restores it to `available` after expiry.
+- Selection priority: lowest `bind_count` first among available cards.
+- If no available card: account gets `sub2api_status=manual_required`.
 
-## Implementation Details
+## Error Recovery
 
-- Local WSL operational notes and session-specific pitfalls are captured in `references/local-wsl-operations.md`; consult it before adding accounts, checking ban status, or promising GitHub push.
-- **Duplicate handling**: If account exists, delete first then re-add with fresh OAuth
-- **Proxy selection**: Auto-selects a real proxy (skips "无代理"/"No Proxy")
-- **Virtual scrolling**: Uses search input to handle sub2api's virtual-scrolled list
-- **Cloudflare bypass**: Uses camofox-browser (stealth Firefox) on port 9377, auto-started if not running
-- **Consent page**: Handles OpenAI consent/continue pages automatically
-- **Remark-based re-auth**: `--check-revoked` reads credentials from account's "备注" field
+| Situation | Action |
+|-----------|--------|
+| Cloudflare challenge blocks OpenAI login | Wait 30s with periodic snapshotText; if stuck, handOffTaskSpace for user to solve |
+| MFA platform unreachable | Fallback to email helper; if both fail, mark manual_required |
+| SMS platform unreachable | Mark SIM unavailable, try next number |
+| Exact OpenAI "recently used" rejection | Set SIM `status=cooldown` and `cooldown_until=now+1 hour`; leave `bind_count`, `last_bind_time`, and `bound_accounts` unchanged; read back, then try the next number (max 3 verified numbers) |
+| Other phone rejection | Handle only according to the observed response; if no evidence-backed transition exists, keep binding fields unchanged and mark the account `manual_required` |
+| No SIM cards available | Mark account manual_required |
+| Feishu Base API error | Report to user, do not proceed (no local cache) |
+| Unknown OpenAI UI | Screenshot + visual model analysis; attempt operation; handoff if stuck |
+| ego-browser "user is controlling" after handoff/takeover | Stop the whole task; after explicit confirmation start with `takeOverTaskSpace(<id>)` |
+| ego-browser task space inactive/unassigned/user-owned | Stop the whole task; after explicit confirmation list spaces, `claimTaskSpace(<id>)`, list tabs, and switch to the exact target tab |
+| Password wrong | Mark account failed, record error in notes |
 
-### Remote infra-agent Camofox Requirements
+## Known UI Patterns
 
-Remote infra-agent authorization depends on Camofox presenting a stable Mac/en-US browser fingerprint, not just using the correct proxy exit IP. On the remote Camofox systemd service, keep these environment variables set:
+See `references/known-ui-patterns.md` for provenance-tagged patterns. Update `screenshot_inferred` to `snapshot_verified` only after observing the live page, and to `live_verified` only after completing the operation with readback.
 
-```ini
-Environment=CAMOFOX_OS=macos
-Environment=CAMOFOX_LOCALE=en-US
-Environment=CAMOFOX_TIMEZONE=America/Los_Angeles
-Environment=CAMOFOX_LATITUDE=37.7749
-Environment=CAMOFOX_LONGITUDE=-122.4194
-Environment=CAMOFOX_GEOIP=0
-```
+## Provider Parsing
 
-Before debugging OAuth failures as proxy/IP problems, verify the actual Camofox page fingerprint:
+See `references/provider-parse-rules.md` for parsing rules and echo format.
 
-```json
-{
-  "userAgent": "...Macintosh...Firefox/135.0",
-  "language": "en-US",
-  "platform": "MacIntel",
-  "timezone": "America/Los_Angeles",
-  "webdriver": false
-}
-```
+## Operational Notes
 
-If OpenAI returns `unknown_country` while the proxy exit IP matches local, inspect Camofox locale/timezone/platform/geoip first. The remote service only accepts `http`/`https` URLs for tab creation; use a real HTTPS URL such as `https://example.com/` for fingerprint self-checks, not `about:blank`.
-
-### Automated Email Verification Code
-
-When OpenAI requires an email verification code during login, the script **automatically**:
-
-1. Detects the "Check your inbox" verification page
-2. Opens the email helper at `email.nloop.cc` in a new browser tab
-3. Pastes the full account line (email ---- password ---- plan ---- token) into the helper
-4. Clicks the "获取邮件" button to fetch emails
-5. Polls for the 6-digit verification code and fills it in
-6. Continues with the authorization flow
-
-**No manual intervention is needed.** Just run the script and wait for it to complete. The agent should NOT attempt to manually handle verification codes — the script handles everything internally.
-
-### accounts.txt Format
-
-```
-email@example.com ---- password123 ---- Plus ---- tok_xxxx
-```
-
-### Environment Variables
-
-Set via `.env` file or `--env <file>`: `SUB2API_ADMIN_EMAIL`, `SUB2API_ADMIN_PASSWORD`, `SUB2API_ADMIN_URL`, `SUB2API_FORCE_PROXY`, `SUB2API_USE_CAMOFOX`, `SUB2API_CAMOFOX_URL`
-
-## Common Mistakes
-
-- **"备注" field empty**: `--check-revoked` requires the remark field to contain the full account line (email ---- password ---- plan ---- token). For read-only ban checks, an empty `notes` field means ban.nloop cannot validate the account unless a parseable `tok_...` token is available; DB `refresh_token`/`rt_...` is not accepted by ban.nloop.
-- **Admin credentials missing**: Required for all operations; set via env or CLI args. On this WSL setup, `/home/kinso/sub2api/docker-compose.yml` contains `ADMIN_EMAIL` / `ADMIN_PASSWORD` for the local container.
-- **sub2api login button timeout**: Newer Sub2API login page labels the submit button `Sign In` and the inputs use placeholders `Enter your email` / `Enter your password`; use `button[type="submit"]` if text-based click times out.
-- **Chrome not installed**: If Playwright errors with `Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome`, remove `channel: "chrome"` from `chromium.launchPersistentContext(...)` and run with bundled Chromium (`npx playwright install chromium`).
-- **Generate auth link button renamed**: Newer Sub2API shows `Generate Auth URL`; include it in the auth-link button text candidates, otherwise automation fails with `Could not find generate auth link button.`
-- **Banned/disabled wording**: In user-facing reports, distinguish `sub2api status` from `ban.nloop token-check status`. Never say an account is disabled/banned unless the matched structured ban.nloop API result for that account is `banned` or sub2api itself reports an error/disabled status. `unknown` means "not enough token evidence to check", not abnormal.
-- **Ban status false positive**: Do not classify ban.nloop output by broad keyword search around an email because the page includes summary text like `banned: 0, normal: 1`; parse the structured `/api/openai-ban/check` JSON and use each matched `results[].status` value.
-- **Browser profile locked**: Delete `.browser-profile/SingletonLock` before runs
-- **camofox not running**: Server auto-starts on port 9377; ensure the port is free
-
-## Output
-
-```
-Summary
-=======
-OK  email1@example.com  ok
-FAIL  email2@example.com  reason
-
-Total: 2, success: 1, failed: 1
-```
-
-Exit code: 0 if all succeed, 1 if any fail.
+See `references/local-wsl-operations.md` for environment-specific details (WSL paths, Docker compose, etc.).
