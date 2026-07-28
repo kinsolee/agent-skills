@@ -61,7 +61,7 @@ Read from `.env` file:
 1. **Dual visual model cross-validation**: Every password, key, URL, or token extracted from screenshots must be read by two visual models independently. Adopt only if both agree. If they disagree, ask the user.
 2. **Redacted echo before write**: After parsing provider docs, echo a structurally complete preview with counts and one masked row per parsed item. Mask passwords, MFA material, tokens, full email addresses, full phone numbers, and secret-bearing URLs. Wait for explicit confirmation before writing to Feishu Base or starting authorization.
 3. **HTML entity provenance**: Keep screenshot OCR raw. Decode entities only for values proven to come from HTML source/DOM text, using standards-compliant decoding.
-4. **Redact in output**: Never show full passwords, tokens, or MFA secrets in commentary or final output. Use `***` masking.
+4. **Redact in all output**: Never show full passwords, tokens, MFA secrets, emails, phone numbers, authorization URLs, callback URLs, or token-bearing URLs in stdout, `cliLog`, commentary, progress reports, errors, cleanup messages, or final output. Use `***` masking and show only non-secret URL origins when useful.
 5. **No local credential cache**: Feishu Base is the single source of truth.
 6. **sub2api remark field**: Leave empty. Do not store credentials there.
 7. **ego-browser task space isolation**: Each account authorization uses its own task space. Complete it when done.
@@ -86,7 +86,7 @@ See `references/provider-parse-rules.md` for detailed parsing rules.
 6. Wait for user confirmation.
 7. On confirmation, write to Feishu Base:
    - GPT accounts: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --json '{"fields":["email","password","source_order","source_provider","mfa_platform_url","mfa_platform_type","email_helper_url","sub2api_status"],"rows":[["<email>","<password>","<order>","<provider>","<mfa-url>","<网页-or-API>","<email-helper-or-null>","pending"]]}' --as user`
-   - SIM cards: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --json '{"fields":["phone_number","sms_url","sms_type","source_order","bound_accounts","bind_count","cooldown_until","valid_until","status"],"rows":[["<phone>","<sms-url>","<网页-or-API-or-unknown>","<order>","",0,null,"<YYYY-MM-DD HH:mm:ss>","available"]]}' --as user`
+   - SIM cards: `lark-cli base +record-batch-create --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --json '{"fields":["phone_number","sms_url","sms_type","source_order","bound_accounts","bind_count","cooldown_until","valid_until","status"],"rows":[["<phone>","<sms-url>","<网页-or-API-or-unknown>","<order>",null,0,null,"<YYYY-MM-DD HH:mm:ss>","available"]]}' --as user`
    - Batch payloads always use the current `{"fields":[...],"rows":[...]}` shape. Keep row order aligned with `fields`, use `null` for empty cells, and split batches above 200 rows.
    - Set `sub2api_status` to `pending` for new GPT accounts.
    - Set `status` to `available`, `bind_count` to 0, `valid_until` to order_date + 30 days for new SIM cards.
@@ -155,7 +155,7 @@ For each account with `sub2api_status=pending` (or user-specified emails):
 6. **Phone binding** (if required):
    Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Phone Binding".
    SIM pool selection logic:
-   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout
+   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --field-id notes --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout
    - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available` with `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '{"status":"available"}' --as user`, then read back the record
    - Mark records with `bind_count >= 3` as `exhausted` and expired records as `expired` with the same complete command shape, their real `record_id`, and the appropriate status field map, then read them back
    - Filter: status=available, valid_until > now, cooldown_until is empty or <= now, bind_count < 3
@@ -173,7 +173,7 @@ For each account with `sub2api_status=pending` (or user-specified emails):
    - `+record-upsert` without `--record-id` creates a new row and must not be used for updates.
    - Success: update the GPT record to `sub2api_status=active`, `auth_time=<YYYY-MM-DD HH:mm:ss>`, and `bound_phone=<phone>`.
    - Successful phone binding: re-read the exact SIM record, compute the complete field map from those observed values, perform one `+record-upsert`, then read back. Increment `bind_count`, set `last_bind_time=<YYYY-MM-DD HH:mm:ss>`, set `cooldown_until=<now + 3 days>` in the same format, append the email to `bound_accounts`, and set `status=cooldown` unless the new bind count is 3, in which case set `status=exhausted`. Do not claim concurrency-safe atomic increment.
-   - "Recently used" rejection: update only `status=cooldown`, `cooldown_until=<now + 1 hour>`, and the diagnostic note. Do not increment `bind_count`, `last_bind_time`, or `bound_accounts`.
+   - "Recently used" rejection: update only `status=cooldown`, `cooldown_until=<now + 1 hour>`, and the real SIM field `notes` with a redacted diagnostic. Do not increment `bind_count`, `last_bind_time`, or `bound_accounts`. Read back projected `status`, `cooldown_until`, `notes`, `bind_count`, `last_bind_time`, and `bound_accounts`; require the three binding fields to equal their pre-write values.
    - Failure: update the GPT record to `sub2api_status=failed` or `manual_required` and append a redacted error to `notes`.
    - Read back every updated record with a projected `+record-list --filter-json '{"logic":"and","conditions":[["email","==","<email>"]]}' --limit 2` or the corresponding phone-number filter before continuing. Require exactly one match and do not project password or secret-bearing URL fields.
 
@@ -209,16 +209,8 @@ Triggered when user says "重新授权", "check revoked", "reauth", or provides 
 
 1. Query Feishu Base for accounts with `sub2api_status=revoked` (or specified emails).
 2. For each account, follow Flow B steps 1-10.
-3. If the account's original `bound_phone` is still available (not in cooldown/expired/unavailable), try reusing it first. Otherwise pick from SIM pool.
+3. Reuse the account's original `bound_phone` only when its real SIM row has `status=available`, `bind_count < 3`, `valid_until > now`, and an empty or expired `cooldown_until`. Otherwise pick from the normal SIM pool. Never reuse `cooldown`, `expired`, `exhausted`, or `unavailable` records.
 4. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
-
-## Flow D: Ban Status Check
-
-Use the preserved `check_all_ban_status.mjs` script for read-only scanning. This script is independent of the playbook and runs via Node.js.
-
-```bash
-cd skills/sub2api-auth && node check_all_ban_status.mjs
-```
 
 ## SIM Pool Rules
 
@@ -252,7 +244,3 @@ See `references/known-ui-patterns.md` for provenance-tagged patterns. Update `sc
 ## Provider Parsing
 
 See `references/provider-parse-rules.md` for parsing rules and echo format.
-
-## Operational Notes
-
-See `references/local-wsl-operations.md` for environment-specific details (WSL paths, Docker compose, etc.).
