@@ -51,19 +51,19 @@
 
 Run:
 ```bash
-lark-cli base +base-create --name "sub2api-auth" --table-name "gpt_accounts" --fields '[
-  {"field_name":"email","type":1},
-  {"field_name":"password","type":1},
-  {"field_name":"source_order","type":1},
-  {"field_name":"source_provider","type":1},
-  {"field_name":"mfa_platform_url","type":1},
-  {"field_name":"mfa_platform_type","type":3,"property":{"options":[{"name":"网页"},{"name":"API"}]}},
-  {"field_name":"email_helper_url","type":1},
-  {"field_name":"bound_phone","type":1},
-  {"field_name":"sub2api_status","type":3,"property":{"options":[{"name":"pending"},{"name":"active"},{"name":"revoked"},{"name":"banned"},{"name":"failed"},{"name":"manual_required"}]}},
-  {"field_name":"auth_time","type":5},
-  {"field_name":"last_reauth_time","type":5},
-  {"field_name":"notes","type":1}
+lark-cli base +base-create --name "sub2api-auth" --time-zone Asia/Shanghai --table-name "gpt_accounts" --fields '[
+  {"name":"email","type":"text","style":{"type":"email"}},
+  {"name":"password","type":"text"},
+  {"name":"source_order","type":"text"},
+  {"name":"source_provider","type":"text"},
+  {"name":"mfa_platform_url","type":"text","style":{"type":"url"}},
+  {"name":"mfa_platform_type","type":"select","multiple":false,"options":[{"name":"网页"},{"name":"API"}]},
+  {"name":"email_helper_url","type":"text","style":{"type":"url"}},
+  {"name":"bound_phone","type":"text"},
+  {"name":"sub2api_status","type":"select","multiple":false,"options":[{"name":"pending"},{"name":"active"},{"name":"revoked"},{"name":"banned"},{"name":"failed"},{"name":"manual_required"}]},
+  {"name":"auth_time","type":"datetime","style":{"format":"yyyy-MM-dd HH:mm"}},
+  {"name":"last_reauth_time","type":"datetime","style":{"format":"yyyy-MM-dd HH:mm"}},
+  {"name":"notes","type":"text"}
 ]' --as user
 ```
 
@@ -74,17 +74,17 @@ Expected: Returns `base_token` and `table_id` for gpt_accounts. Record both valu
 Run:
 ```bash
 lark-cli base +table-create --base-token "<BASE_TOKEN>" --name "sim_cards" --fields '[
-  {"field_name":"phone_number","type":1},
-  {"field_name":"sms_url","type":1},
-  {"field_name":"sms_type","type":3,"property":{"options":[{"name":"网页"},{"name":"API"},{"name":"unknown"}]}},
-  {"field_name":"source_order","type":1},
-  {"field_name":"bound_accounts","type":1},
-  {"field_name":"bind_count","type":2},
-  {"field_name":"last_bind_time","type":5},
-  {"field_name":"cooldown_until","type":5},
-  {"field_name":"valid_until","type":5},
-  {"field_name":"status","type":3,"property":{"options":[{"name":"available"},{"name":"cooldown"},{"name":"expired"},{"name":"exhausted"},{"name":"unavailable"}]}},
-  {"field_name":"notes","type":1}
+  {"name":"phone_number","type":"text"},
+  {"name":"sms_url","type":"text","style":{"type":"url"}},
+  {"name":"sms_type","type":"select","multiple":false,"options":[{"name":"网页"},{"name":"API"},{"name":"unknown"}]},
+  {"name":"source_order","type":"text"},
+  {"name":"bound_accounts","type":"text"},
+  {"name":"bind_count","type":"number","style":{"type":"plain","precision":0,"percentage":false,"thousands_separator":false}},
+  {"name":"last_bind_time","type":"datetime","style":{"format":"yyyy-MM-dd HH:mm"}},
+  {"name":"cooldown_until","type":"datetime","style":{"format":"yyyy-MM-dd HH:mm"}},
+  {"name":"valid_until","type":"datetime","style":{"format":"yyyy-MM-dd HH:mm"}},
+  {"name":"status","type":"select","multiple":false,"options":[{"name":"available"},{"name":"cooldown"},{"name":"expired"},{"name":"exhausted"},{"name":"unavailable"}]},
+  {"name":"notes","type":"text"}
 ]' --as user
 ```
 
