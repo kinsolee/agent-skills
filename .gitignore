@@ -1,6 +1,9 @@
 node_modules/
 .env
 accounts.txt
+accounts-temp.txt
+.banned-accounts-backup-*.txt
+debug-dropdown.png
 *.log
 playwright-report/
 test-results/

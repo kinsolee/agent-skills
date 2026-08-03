@@ -63,6 +63,19 @@ Parsing algorithm:
 5. Capture order number, provider, stated quantity, and order-creation timestamp from the pack or its accompanying order evidence; otherwise mark each missing value explicitly.
 6. Report the observed email count. If stated quantity exists, require equality; otherwise mark the authoritative check unavailable.
 
+### Variant: per-account labeled segments with direct 2FA secret (observed 2026-08-04)
+
+Some providers ship one row per account with inline labels instead of a shared password, for example (separators shown redacted): `email———密码：X———2fa密钥：Y———https://取码网址/ 备用：https://备用网址/`.
+
+Parsing rules for this variant:
+1. Split each `卡密内容` row on the repeated separator run (three or more `—` / `-` characters), then parse `label：value` segments. Keep every credential byte exactly as delivered; do not trim inside values.
+2. The email is the unlabeled leading segment; validate full email shape (plus-addressing such as `user+tag@gmail.com` is valid).
+3. `密码：` supplies a per-row password (not shared). Require non-empty.
+4. `2fa密钥：` supplies a per-row TOTP seed; validate base32 charset (`A-Z2-7`, typically 32 chars) and write it to Base `mfa_secret`. This is a secret: mask in all output.
+5. The trailing HTTP(S) URL is the MFA platform URL; a following `备用：` URL is a backup platform. Store the primary in `mfa_platform_url`; keep backups in the account `notes`.
+6. The 使用说明 may warn that MFA is a TOTP 6-digit code and NOT Google sign-in; reflect this as TOTP-only in the account `notes` and prefer the authenticator/TOTP challenge path.
+7. Set `mfa_platform_type=unknown` until the platform is live-probed during authorization.
+
 ## SIM Card Pack Format
 
 Observed structure from a redacted real provider order snapshot; provider and order identifiers are withheld:
@@ -80,6 +93,22 @@ Parsing algorithm:
 3. Extract the order number, order-creation timestamp, stated validity range, and stated quantity. When order timestamp is missing from both text and screenshots, use current time as conservative fallback for `valid_until` calculation (`now + 30 days`).
 4. Compute `valid_until` from the verified order-creation timestamp plus the stated upper-bound duration, or from the conservative fallback (`now + 30 days`) when no timestamp is available.
 5. Report the observed entry count. If stated quantity exists, require equality; otherwise mark the authoritative check unavailable.
+
+## SIM Redemption-Code Pack Format (observed 2026-08-04, channel chongpt.xyz)
+
+Some SMS providers sell redemption codes (卡密) instead of phone numbers: each row is an alphanumeric code, and the 使用说明 carries one shared 兑换地址. The phone number and code-fetch page only exist after redeeming a code on that site.
+
+Observed structure:
+- **使用说明**: `兑换地址: https://<origin>/` plus a validity statement such as `号码25-29天有效期有效期内无限获取验证码` (number valid 25–29 days; unlimited code fetches within validity).
+- **Card list**: one redemption code per line (alphanumeric, no separators), e.g. `SMS****` prefix observed.
+
+Parsing algorithm:
+1. Extract the redemption URL from the labeled `兑换地址` field; validate HTTP(S). Store as `redeem_url` for every row in the pack.
+2. Extract each code line; require non-empty alphanumeric content; reject rows containing URLs, phone numbers, or separators (those belong to the direct SIM format).
+3. Validate codes are unique within the batch and not already present in Base `redeem_code`.
+4. Set `channel=chongpt` (or the observed channel origin), `phone_number`/`sms_url` empty, `sms_type=unknown`, `status=available`, `bind_count=0`.
+5. Validity: the clock is not observable before redemption. Compute `valid_until = now + stated lower bound` (25 days for a stated 25–29 day contract) as a conservative estimate, and note that redemption must correct it from the live page.
+6. Order number/provider/quantity/timestamp follow the general metadata rules: mark missing explicitly; they do not block the write.
 
 ## Multi-Pack Handling
 

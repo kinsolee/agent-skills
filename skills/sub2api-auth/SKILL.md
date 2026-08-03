@@ -69,6 +69,11 @@ Resolve at runtime via lark-cli (no .env tokens needed):
 11. **Exact browser ownership branches**: Ordinary later rounds start with `useOrCreateTaskSpace(<numeric-id>)`. After a confirmed handoff or unexpected takeover, resume with `takeOverTaskSpace(<numeric-id>)`. For a confirmed inactive, unassigned, or user-owned space, use `listTaskSpaces()`, `claimTaskSpace(id)`, `listTabs()`, then `switchTab(targetId)`. A user-control error is a hard stop until explicit confirmation.
 12. **Normalize Base URL cells before browser use**: A Base URL-style text cell may read back as a Markdown link such as `[label](https://...)`. For recognized Markdown-link cells, prefer the URL inside the parentheses; otherwise retain the raw value. Validate the normalized scheme and expected origin/shape, keep it process-local, and never print it.
 13. **Condition-based Base readback**: A successful Base write response is not the completion proof. Poll a projection of the exact record ID until every expected field matches or a bounded timeout expires. A transient stale read must not be reported as either success or permanent failure.
+14. **Password fields: native setter only**: ego-browser's `fillInput` may append to an existing value instead of replacing it on OpenAI password inputs, silently doubling the password. Always set password fields via `js()` using the native `HTMLInputElement.prototype.value` setter, dispatching `input` and `change` events with `{ bubbles: true }`. Verify the filled length matches the expected length before submitting. Do not use `fillInput` for `input[name="current-password"]` or any credential-bearing input that already has a value.
+15. **OpenAI form submission via requestSubmit**: The OpenAI auth password form uses React Router. Clicking the submit button with ego-browser's `click()` may trigger a native form POST that is intercepted by OpenAI's sentinel bot-detection iframe and times out. Instead, call `form.requestSubmit(buttonElement)` via `js()` to trigger React Router's fetch-based submission path, which passes through the browser's existing Cloudflare session. The password verification endpoint is `/api/accounts/password/verify` (POST, JSON body `{"password":"..."}`) — do not use `/api/accounts/authorize/continue` for the password step.
+16. **OAuth identity is a hard gate**: ego-browser task space isolation does not guarantee a fresh OpenAI login state; a new space can inherit an account chooser or authenticated session for a previous account. Before consent, require the provider-visible email to exactly match the target Base record. On an account chooser, select `Log in to another account` / `登录至另一个帐户` unless the displayed account exactly matches the target. Never infer identity from the sub2api account name, callback success, or `正常` status. Before marking Base active, require the Sub2API backend credential identity to match the target Base email, `has_access_token=true`, `has_refresh_token=true`, current credential metadata, `status=active`, `schedulable=true`, empty error, and an SSE model test ending in `test_complete success=true`.
+17. **MFA-first verification**: When OpenAI requires second-factor verification and an authenticator/MFA/TOTP path is offered, always attempt MFA before email OTP. An account's MFA availability is determined by the OpenAI challenge page, not only by Base `mfa_platform_url`; when the field is empty, probe the known MFA platform (`2fa.nloop.cc`) with the target email before choosing email OTP. After a successful MFA-first result, update the Base record's `mfa_platform_url` if it was previously empty. Two MFA platform shapes exist: email-keyed platforms (query by account email, e.g. `2fa.nloop.cc`) and secret-keyed platforms (paste the account's Base `mfa_secret` TOTP seed, e.g. `2fa.run`). Choose the shape by the platform's observed input, never by URL alone; when a platform page fails and the account has `mfa_secret`, computing TOTP locally from the seed (RFC 6238, base32 HMAC-SHA1, 30 s window) is an acceptable fallback.
+18. **Never fork the OpenAI auth-flow state**: Do not drive OpenAI login steps from outside the page's own flow. Calling `/api/accounts/authorize/continue` via standalone `fetch`/`js()` and then hard-navigating to `/log-in/password` returns `200 login_password` for the email step but permanently forks the server-side login-flow state, so every later `/api/accounts/password/verify` fails with `401 invalid_username_or_password` even when the submitted password is byte-exact (proven 2026-08-03 by a probe that sent the checksum-verified correct password and still got 401). Always let the page's own React flow perform each step (fill input, click the real Continue control). Recover from a stuck or timed-out step by restarting the whole flow fresh (close tab, reopen the authorization URL), never by bypassing the form with a direct API call.
 
 ## Flow A: Provider Document Parsing
 
@@ -91,6 +96,8 @@ See `references/provider-parse-rules.md` for detailed parsing rules.
    - Batch payloads always use the current `{"fields":[...],"rows":[...]}` shape. Keep row order aligned with `fields`, use `null` for empty cells, and split batches above 200 rows.
    - Set `sub2api_status` to `pending` for new GPT accounts.
    - Set `status` to `available`, `bind_count` to 0, `valid_until` to the verified order-creation timestamp plus the stated validity upper bound (30 days for the observed 25–30 day contract; or `now + 30 days` when using the conservative fallback) for new SIM cards.
+   - Per-account MFA delivery: when each account row carries its own TOTP seed (e.g. `邮箱———密码：X———2fa密钥：Y———取码网址`), write the seed into `mfa_secret` and the labeled 取码网址 into `mfa_platform_url` (`mfa_platform_type=unknown` until live-probed). Shared-password packs leave `mfa_secret` empty.
+   - Redemption-code SIM delivery (e.g. `chongpt.xyz`): rows carry a redeem code, not a phone number. Write `redeem_code`, `redeem_url` (the 兑换地址 from 使用说明), `channel=chongpt`, `phone_number`/`sms_url` empty, `sms_type=unknown`, and compute `valid_until` from the stated validity lower bound (`now + 25 days` for a stated 25–29 day contract) because the validity clock is not observed until redemption; correct it from the live page after redemption.
    - All Base datetime CellValues use `YYYY-MM-DD HH:mm:ss`.
 9. Read back every written record by record_id to confirm field values match.
 10. Auto-execute:
@@ -138,17 +145,23 @@ For each account with `sub2api_status=pending` (or user-specified emails):
 5. **Handle verification** (observe-act-verify):
    After password submission, `snapshotText()` to determine what OpenAI requires:
 
-   - **MFA code page** (code input visible + account has mfa_platform_url):
-     Follow `references/known-ui-patterns.md` → "OpenAI OAuth — MFA Verification".
+   - **MFA / authenticator code page** (code input visible, or OpenAI offers both authenticator and email methods):
+     Prefer MFA over email OTP whenever an authenticator/MFA challenge is available (see Hard Rule 17). If the account has `mfa_platform_url`, use it. If `mfa_platform_url` is empty but OpenAI shows an authenticator/TOTP option, open `https://2fa.nloop.cc/` and query the target Base email before choosing email OTP. Follow `references/known-ui-patterns.md` → "OpenAI OAuth — MFA Verification". Only fall back to email OTP when the MFA platform reports no result, multiple ambiguous results, or is unreachable.
+     When the account has a non-empty `mfa_secret`, the platform is secret-keyed: open `mfa_platform_url` (default `https://2fa.run/`, backups from the account notes), paste the `mfa_secret` seed, and read the current 6-digit TOTP code (follow `references/known-ui-patterns.md` → "MFA Platform — 2fa.run (TOTP Secret Input)"). If the platform page fails, compute TOTP locally from `mfa_secret` instead of falling back to email OTP.
 
    - **Email verification page** (fallback when MFA unavailable):
-     Open email helper URL in new tab, import account email, poll for 6-digit code, fill in OpenAI tab.
+     Use email OTP only after MFA is unavailable or failed. For iCloud mailboxes, the observed `email.nloop.cc` import format is the bare email address (not `email----password`). If the helper stays at “点击获取邮件” after a real fetch attempt without mail, code, or error, stop and hand off rather than guessing a code.
+
+   - **Never drive OpenAI auth steps from outside the app's own flow**: Do not call `/api/accounts/authorize/continue` (or any auth-step endpoint) via standalone `fetch`/`js()` and then hard-navigate to the next page. A 2026-08-03 controlled probe proved this forks the server-side login-flow state: the email step returns `200 login_password`, but every subsequent `/api/accounts/password/verify` fails with `401 invalid_username_or_password` even when the submitted password is byte-exact (checksum-verified). Always let the page's own React flow perform each step (fill input → click the real Continue control); recover from errors by restarting the flow fresh instead.
 
    - **Phone binding page** (phone number input or "Check your phone" text):
      Follow Flow B step 6 below.
 
    - **Consent page** (Continue/Allow/Authorize button):
      Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Consent Page".
+
+   - **Inherited account chooser** ("选择一个帐户" / "Choose an account"):
+     Treat the displayed session as untrusted. If the provider-visible account does not exactly match the target Base email, click `登录至另一个帐户` / `Log in to another account` and authenticate the target account. Do not select the previous account merely because the task space is new. Allow one fresh target-login attempt; if the chooser or consent page still shows another identity, stop without consuming or submitting a callback.
 
    - **Callback redirect or callback error page**:
      If the current URL is localhost/`127.0.0.1`, retain it silently and proceed to step 7. If Chromium renders an error page and the original callback is no longer exposed by `pageInfo()`, call CDP `Page.getNavigationHistory`, recover exactly one original localhost/`127.0.0.1` callback entry, validate its expected path and query-key shape without logging it, then proceed to step 7.
@@ -157,7 +170,10 @@ For each account with `sub2api_status=pending` (or user-specified emails):
      Follow `references/known-ui-patterns.md` → "CAPTCHA & Cloudflare Automation". The agent attempts all automated resolution (click checkbox, wait for JS challenge, visual model solves image challenge) before considering handoff. Max 3 rounds for Cloudflare interstitial, max 2 rounds for image CAPTCHA. Only after all rounds fail does the agent call `handOffTaskSpace`.
 
    - **Email mismatch on consent page**:
-     If the consent/authorization page displays an email that does not match the target account email from Base, the agent automatically logs out of OpenAI (click logout/sign-out), returns to the login page, and re-enters the correct credentials from Base. Max 1 retry; if logout does not return to a login page, call `handOffTaskSpace`.
+     Do not click Continue. If the consent/authorization page displays an email that does not exactly match the target account email from Base, the agent automatically logs out of OpenAI (click logout/sign-out), returns to the login page, and re-enters the correct credentials from Base. Max 1 fresh-login retry; if logout does not return to a login page, call `handOffTaskSpace`. If the identity still mismatches, stop without submitting the callback or writing success state.
+
+   - **Account deactivated** (`account_deactivated` text on page after password submission):
+     The OpenAI account has been deactivated by OpenAI. Do not retry. Mark the Base record `sub2api_status=failed` with notes `account_deactivated confirmed (<date>)`. Delete the account from sub2api admin (search → 删除 → confirm dialog 删除). Read back both the Base record and the sub2api account list to confirm removal. Continue to the next account.
 
    - **Unknown page**:
      `captureScreenshot()`, analyze with visual model to understand page layout, locate inputs/buttons, and determine the next action. Act on the visual model's guidance, then screenshot to verify. Max 2 safe attempt rounds. If still stuck after 2 rounds, call `handOffTaskSpace(<PERSISTED_NUMERIC_TASK_SPACE_ID>)`, emit only the returned `{done, skipped}` state, and ask the user for help only when `done === true`. If handoff is skipped, report the ownership state without claiming control was transferred.
@@ -168,17 +184,18 @@ For each account with `sub2api_status=pending` (or user-specified emails):
 6. **Phone binding** (if required):
    Follow `references/known-ui-patterns.md` → "OpenAI OAuth — Phone Binding".
    SIM pool selection logic:
-   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --field-id notes --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout
+   - Query only the required SIM fields from Feishu Base with `+record-list --field-id phone_number --field-id sms_url --field-id sms_type --field-id channel --field-id redeem_url --field-id bound_accounts --field-id bind_count --field-id last_bind_time --field-id cooldown_until --field-id valid_until --field-id status --field-id notes --format json`, retaining each candidate's `record_id`; keep raw secret-bearing rows out of stdout. Do not project `redeem_code` in selection listings; re-read it process-local by exact `record_id` only for the single row you are about to redeem.
    - Reconcile `status=cooldown` records whose `cooldown_until <= now` back to `available` with `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_SIM_CARDS" --record-id "<sim-record-id>" --json '{"status":"available"}' --as user`, then read back the record
    - Mark records with `bind_count >= 3` as `exhausted` and expired records as `expired` with the same complete command shape, their real `record_id`, and the appropriate status field map, then read them back
    - Filter: status=available, valid_until > now, cooldown_until is empty or <= now, bind_count < 3
    - Exclude phones already tried this round
    - Sort by bind_count ascending, pick first
+   - Redemption-code rows: a selected row with `channel=chongpt` and an empty `phone_number` has not been redeemed yet. Follow `references/known-ui-patterns.md` → "SMS Platform — chongpt.xyz (Redemption-Code Channel)" to redeem it, then write the observed `phone_number` (and any observed per-number page/URL) back to that exact SIM record before phone entry. A redemption-code row is only eligible if `redeem_url` is present and `valid_until > now`. If redemption observably fails (invalid/expired code), set that row `status=unavailable` with a redacted diagnostic in `notes`, read back, and pick the next candidate.
    - If none available: update the GPT record to `sub2api_status=waiting_sim` and `waiting_since=<YYYY-MM-DD HH:mm:ss>`, read back, close the task space (step 9), and continue to the next account. Do not mark `manual_required` for recoverable inventory shortage.
 
 7. **Fill callback URL in sub2api**:
    Follow `references/known-ui-patterns.md` → "sub2api Admin — Fill Callback URL".
-   Before any success write to Feishu Base, read the created account back in sub2api and require exactly one matching row, observed status `正常`, and an empty remark in the edit dialog. If uniqueness, status, or remark is ambiguous or fails, do not mark the Base account active.
+   Before any success write to Feishu Base, read the created account back through the Sub2API admin API and require exactly one matching row; backend credential email exactly matching the target Base email; `credentials_status.has_access_token=true`; `credentials_status.has_refresh_token=true`; current credential metadata; `status=active`; `schedulable=true`; empty error; and an SSE `/api/v1/admin/accounts/<id>/test` stream containing non-error model output followed by `test_complete success=true`. Also require an empty remark in the edit dialog. A row name, toast, callback acceptance, or visible `正常` status alone is insufficient. If any identity, credential, test, uniqueness, status, scheduling, or remark check is ambiguous or fails, delete the newly created mismatched row when its identity is proven wrong, read back its absence, and do not mark the Base account active.
 
 8. **Update Feishu Base**:
    - GPT update shape: `lark-cli base +record-upsert --base-token "$FEISHU_BASE_APP_TOKEN" --table-id "$FEISHU_TABLE_GPT_ACCOUNTS" --record-id "<gpt-record-id>" --json '<field-map>' --as user`.
@@ -224,12 +241,14 @@ If `waiting_sim` count > 0, append: "Paste a SIM card order to automatically res
 
 ## Flow C: Re-authorization
 
-Triggered when user says "重新授权", "check revoked", "reauth", or provides specific emails.
+Triggered when user says "重新授权", "check revoked", "reauth", "错误状态", or provides specific emails.
 
-1. Query Feishu Base for accounts with `sub2api_status=revoked` (or specified emails).
-2. For each account, follow Flow B steps 1-10.
-3. Reuse the account's original `bound_phone` only when its real SIM row has `status=available`, `bind_count < 3`, `valid_until > now`, and an empty or expired `cooldown_until`. Otherwise pick from the normal SIM pool. Never reuse `cooldown`, `expired`, `exhausted`, or `unavailable` records.
-4. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
+1. Identify error-state accounts: query Feishu Base for `sub2api_status=revoked` (or specified emails), **and** cross-check the sub2api admin panel for accounts showing status `错误` (Token revoked 401). Base and sub2api may be out of sync; the sub2api admin panel is the live source of truth for current account status.
+2. For each account, use the sub2api admin "重新授权" dialog (account row → 更多 → 重新授权 → 生成授权链接) instead of the "添加账号" flow. The reauth dialog pre-fills platform/group/proxy and only requires the auth URL → OpenAI login → callback steps.
+3. Follow Flow B steps 4-10 (OpenAI login through Base update), applying Hard Rules 14 and 15 for password handling.
+4. Reuse the account's original `bound_phone` only when its real SIM row has `status=available`, `bind_count < 3`, `valid_until > now`, and an empty or expired `cooldown_until`. Otherwise pick from the normal SIM pool. Never reuse `cooldown`, `expired`, `exhausted`, or `unavailable` records.
+5. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
+6. If OpenAI reports `account_deactivated`, mark the Base record `failed` with deactivation notes, delete the account from sub2api admin, read back both, and continue to the next account. Do not mark `manual_required` for deactivated accounts — they are permanently unrecoverable.
 
 ## Flow D: Resume Waiting-SIM Accounts
 
@@ -253,6 +272,7 @@ Triggered automatically after a SIM card order is written and read back in Flow 
 - 25-30 day validity from purchase (`valid_until`). Expired cards get `status=expired`.
 - On "recently used" rejection: `status=cooldown`, `cooldown_until = now + 1 hour`. A later selection pass restores it to `available` after expiry.
 - Selection priority: lowest `bind_count` first among available cards.
+- Redemption-code channel (`channel=chongpt`): the row stores a `redeem_code` and `redeem_url` but no phone number until redeemed. The number is assigned at redemption and its real validity (stated 25–29 days) is confirmed then; pre-redemption `valid_until` is a conservative lower-bound estimate. Within validity the platform allows unlimited code fetches and limited number changes — a fresh SMS read after `开始接收`/`再次接收`/`刷新验证码` is normal and does not by itself consume a binding. OpenAI-side limits (`bind_count < 3`, cooldowns, recently-used rejections) still apply to the redeemed number exactly as for direct-channel numbers.
 - If no available card: account gets `sub2api_status=waiting_sim` with `waiting_since=<now>`. This is a durable, resumable state — not a terminal failure.
 
 ## Error Recovery
@@ -273,11 +293,18 @@ Triggered automatically after a SIM card order is written and read back in Flow 
 | 3 numbers tried, more available in pool | Continue with remaining eligible numbers |
 | 3 numbers tried, pool empty | Set `sub2api_status=waiting_sim`, `waiting_since=now`; close task space; continue next account |
 | Email mismatch on consent page | Auto-logout → re-login with correct credentials; max 1 retry; if logout fails, handoff |
+| OpenAI offers both authenticator MFA and email OTP | Choose MFA/authenticator first. Use `mfa_platform_url` when present; otherwise try `2fa.nloop.cc` with the target email. Fall back to email OTP only after observed MFA failure. |
+| OpenAI account chooser shows another account | Click `登录至另一个帐户` / `Log in to another account`; authenticate the exact target; never select the inherited previous account |
+| Callback succeeds but backend identity differs from target Base email | Delete the newly created mismatched Sub2API row, read back absence, keep Base non-active, and restart once in a fresh isolated target-login flow |
 | Unknown OpenAI UI | Screenshot → visual model understands layout → act → verify; max 2 rounds, then handoff |
 | Feishu Base API error | Report to user, do not proceed (no local cache) |
 | ego-browser "user is controlling" after handoff/takeover | Stop the whole task; after explicit confirmation start with `takeOverTaskSpace(<id>)` |
 | ego-browser task space inactive/unassigned/user-owned | Stop the whole task; after explicit confirmation list spaces, `claimTaskSpace(<id>)`, list tabs, and switch to the exact target tab |
-| Password wrong | Mark account failed, record error in notes |
+| Password wrong | First rule out a forked auth-flow state (see Hard Rule 18): restart the flow fresh and retry once with the same Base value before concluding the password is wrong. Only after a clean fresh-flow attempt fails with a correct checksum-verified value, mark account failed and record error in notes |
+| `account_deactivated` on OpenAI page | Mark Base `failed` with deactivation notes; delete from sub2api admin; read back both; continue next account. Terminal — do not retry or mark `manual_required` |
+| OpenAI sentinel timeout on password form | The sentinel bot-detection iframe blocks native form POST. Use `form.requestSubmit(btn)` via `js()` instead of ego-browser `click()` on the submit button (see Hard Rule 15). If still timing out after 3 rounds, handoff |
+| `fillInput` doubles password value | ego-browser `fillInput` may append instead of replace on OpenAI password inputs. Use native setter via `js()` and verify `input.value.length` matches expected before submitting (see Hard Rule 14) |
+| OpenAI "Operation timed out" error page | Transient network/sentinel issue on auth.openai.com. Click 重试 (Retry), wait 5-8s, re-observe. If the form step still times out, do NOT fall back to a standalone fetch of `/api/accounts/authorize/continue` — that forks the login-flow state and makes every later password verify fail with `invalid_username_or_password` (proven 2026-08-03). Instead restart fresh: close the tab, reopen the original (or newly generated) authorization URL, and redo the form flow; the fresh attempt normally succeeds immediately |
 
 ## Known UI Patterns
 

@@ -1,0 +1,17 @@
+PROVENANCE
+source_system: OpenAI OAuth account chooser via ego-browser
+capture_time: 2026-08-03T10:27:21.408Z
+capture_method: snapshotText during live sub2api OAuth authorization
+redaction_notes: account display name and full email replaced; URLs reduced to route labels
+source_hash_scope: complete unredacted function_call_output retained in the local Codex session log
+source_sha256: b46fc83bcd8e25f25580ae758da192914a4a3816ebfc25c7900fd26462b5f077
+
+SNAPSHOT
+heading "欢迎回来"
+text "选择一个帐户以继续前往 Codex"
+button name="session_id"
+  text "选择帐户"
+  text "PREVIOUS_ACCOUNT"
+  text "p***@example.com"
+anchor href="/log-in-or-create-account"
+  text "登录至另一个帐户"
