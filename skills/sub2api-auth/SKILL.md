@@ -249,6 +249,11 @@ Triggered when user says "重新授权", "check revoked", "reauth", "错误状�
 4. Reuse the account's original `bound_phone` only when its real SIM row has `status=available`, `bind_count < 3`, `valid_until > now`, and an empty or expired `cooldown_until`. Otherwise pick from the normal SIM pool. Never reuse `cooldown`, `expired`, `exhausted`, or `unavailable` records.
 5. On success, update `sub2api_status` to `active`, set `last_reauth_time` using `YYYY-MM-DD HH:mm:ss`, and read the record back.
 6. If OpenAI reports `account_deactivated`, mark the Base record `failed` with deactivation notes, delete the account from sub2api admin, read back both, and continue to the next account. Do not mark `manual_required` for deactivated accounts — they are permanently unrecoverable.
+7. **Post-reauth config verification (onboarded-state check)**: after every successful reauth, verify the account is back to its just-onboarded state, not merely `active`:
+   - `schedulable=true` (re-enable via `POST /api/v1/admin/accounts/<id>/schedulable` with `{"schedulable":true}` if the reauth or a manual toggle left it off).
+   - `credentials.model_mapping` intact: reauth replaces credentials and can drop the per-account model mapping (observed on account #165, 2026-08-04). A missing mapping makes the gateway silently fall back to a smaller built-in default model list, so requests for mapped models fail routing. Compare against a healthy same-group account or, better, the group's canonical list `groups.models_list_config.models` (enabled) in the sub2api Postgres DB.
+   - Repair by `PUT /api/v1/admin/accounts/<id>` with `{"credentials":{"model_mapping":{<model>:<model>, ...}}}` (identity map from the canonical list). The server merges credentials; tokens are preserved — still read back `credentials_status` (access/refresh/id tokens all present) plus unchanged `concurrency/priority/rate_multiplier/proxy_id/group_ids`, and finish with an SSE `/test` ending in `test_complete success=true`.
+   - Do not use `POST /api/v1/admin/accounts/<id>/models/sync-upstream` for OpenAI `oauth` accounts: it returns 400 `Unsupported OpenAI account type for upstream model sync: oauth` (apikey accounts only).
 
 ## Flow D: Resume Waiting-SIM Accounts
 
