@@ -55,7 +55,7 @@ npm run auth -- --accounts accounts.txt
 Useful options:
 
 ```bash
-npm run auth -- --accounts accounts.txt --admin-url http://<ego-browser-host>:8080/admin/accounts
+npm run auth -- --accounts accounts.txt --admin-url "$SUB2API_ADMIN_URL"
 npm run auth -- --one email@example.com
 npm run auth -- --headless
 npm run auth -- --accounts accounts.txt --keep-open-on-fail

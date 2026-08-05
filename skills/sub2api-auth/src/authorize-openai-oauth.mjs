@@ -9,7 +9,7 @@ import process from "node:process";
 import { chromium } from "playwright";
 
 const DEFAULTS = {
-  adminUrl: "http://<ego-browser-host>:8080/admin/accounts",
+  adminUrl: process.env.SUB2API_ADMIN_URL || ((process.env.SUB2API_ADMIN_BASE || "").replace(/\/$/, "") + "/admin/accounts"),
   platform: "OpenAI",
   accountType: "Oauth",
   group: "openai",

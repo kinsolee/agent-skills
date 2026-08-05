@@ -10,7 +10,8 @@ const envLine = (name) => {
 };
 const adminEmail = envLine('ADMIN_EMAIL');
 const adminPassword = envLine('ADMIN_PASSWORD');
-const adminUrl = 'http://<sub2api-host>:8080/admin/accounts';
+const adminUrl = process.env.SUB2API_ADMIN_URL || ((process.env.SUB2API_ADMIN_BASE || '').replace(/\/$/, '') + '/admin/accounts');
+if (!process.env.SUB2API_ADMIN_URL && !process.env.SUB2API_ADMIN_BASE) { console.error('set SUB2API_ADMIN_URL or SUB2API_ADMIN_BASE'); process.exit(2); }
 
 async function loadCredentialFallbacks() {
   const { execFileSync } = await import('node:child_process');

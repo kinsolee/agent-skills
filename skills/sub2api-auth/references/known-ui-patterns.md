@@ -26,16 +26,33 @@ For every pattern below:
 11. **Password inputs: use native setter, not `fillInput`**. ego-browser's `fillInput` may append to an existing value on OpenAI password fields, silently doubling the credential. Set password fields via `js()` using `Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set`, then dispatch `input` and `change` events with `{ bubbles: true }`. Always verify `input.value.length` matches the expected credential length before submitting.
 12. **OpenAI form submission: use `requestSubmit`**. The OpenAI auth password form uses React Router. ego-browser's `click()` on the submit button may trigger a native form POST intercepted by OpenAI's sentinel bot-detection iframe (`sentinel.openai.com/backend-api/sentinel/frame.html`), causing "Operation timed out". Use `form.requestSubmit(buttonElement)` via `js()` to trigger React Router's fetch-based path through `/api/accounts/password/verify`, which passes through the browser's existing Cloudflare session.
 13. **Task-space isolation is not login-state proof**. A newly created ego-browser task space can still open an OpenAI account chooser or authenticated consent state for a previous account. Provider-visible identity must exactly match the target Base email before consent or callback submission.
+14. **Hang diagnosis and recovery (live-verified 2026-08-04, #167 reauth).** Observed failure mode: an ego-browser script appears to hang with ZERO output, yet its actions actually executed — `cliLog` output is buffered until clean process exit, so a hung client prints nothing even for completed steps. Rules learned:
+    - Before concluding a step failed, kill the hung client PID (exact PID via `pgrep -fl "ego-browser nodejs"`; NEVER `pkill -f "ego-browser"` — that matches the `ego lite` app bridge process `--startup-ego-browser-service`, kills the service, and destroys all task spaces) and re-observe page state via a fresh minimal script.
+    - Always `switchTab(targetId)` before any `cdp(...)`/evaluate call: without an explicit tab switch, evaluate can route to a stale/wrong target and hang.
+    - If the `js()` helper hangs on a page, use `cdp('Runtime.evaluate', { expression, returnByValue: true, timeout: 4000-8000 })` instead — it targets the switched tab's main frame and worked on auth.openai.com and 2fa.nloop.cc where `js()` hung.
+    - Script parsing is flaky: identical scripts sometimes fail with `SyntaxError: await is only valid...` via stdin heredoc. Retry, or pass the script via `ego-browser nodejs < file.mjs` (file input observed more reliable). Avoid `import` statements in scripts; read secrets from mode-600 temp files via dynamic `await import('node:fs')` only when needed, and delete them after.
+    - A hung client can hold a task-space lock so later `useOrCreateTaskSpace` calls hang too — kill all stale client PIDs between retries.
+
+## sub2api Admin — API-First Operations (preferred)
+
+Evidence:
+- `evidence_status`: `source_verified` + live probes (account list + generate-auth-url succeeded 2026-08-04 against the configured sub2api instance)
+- `source`: upstream Wei-Shaw/sub2api Go routes/handlers + Vue composables; see `references/sub2api-admin-api.md`
+- `scope_note`: all sub2api management operations (login, generate auth URL, create account, complete auth, read back, test, set schedulable, delete, reauth) are driven through the admin REST API via `src/sub2api-admin-api.mjs` (`x-api-key`). The browser admin-panel sections below ("Login", "Generate Auth URL", "Fill Callback URL") are the FALLBACK only when the API is unreachable. The browser is still required for everything on `auth.openai.com` (login, MFA, phone binding, consent).
+
+New-account sequence: `generate-auth-url` → browser OpenAI flow → capture `code`+`state` → `create` (exchange-code + accounts.create).
+Reauth sequence: `list --search <email>` → `generate-auth-url` → browser → capture callback → `apply --id <id>` (exchange-code + apply-oauth-credentials).
 
 ## sub2api Admin — Login
 
 Evidence:
 - `evidence_status`: `live_verified`
+- `status`: `superseded` — API calls authenticate via `x-api-key` (`SUB2API_ADMIN_API_KEY`); no panel login is needed (Hard Rule 20). Fallback only when the API is unreachable.
 - `source`: historical sub2api automation, latest relevant commit `9aca6f1`
 - `as_of`: `2026-05-12`
-- `scope_note`: historical live verification used a different host; it does not validate the current host, so take a fresh snapshot on `<sub2api-host>` before the first current action and treat UI drift as possible
+- `scope_note`: historical live verification used a different host; it does not validate the current host, so take a fresh snapshot on the configured sub2api host before the first current action and treat UI drift as possible
 
-Page: `SUB2API_ADMIN_URL` (default `http://<sub2api-host>:8080/admin/accounts`)
+Page: the configured admin URL (`SUB2API_ADMIN_BASE`/`SUB2API_ADMIN_URL` from `.env`; no hardcoded default)
 
 1. In the reused task space, `openOrReuseTab(adminUrl, { wait: true })`.
 2. `snapshotText()` and `pageInfo()` — check whether the URL contains `/login`.
@@ -50,7 +67,8 @@ Note: ego-browser may inherit the user's login session. If already logged in, sk
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current-host ego-browser E2E on sub2api `<sub2api-host>:8080`
+- `status`: `superseded` — use `sub2api-admin-api.mjs generate-auth-url` (API-first, Hard Rule 20). This panel-dialog flow is the fallback only when the API is unreachable.
+- `source`: current-host ego-browser E2E on the configured sub2api instance
 - `as_of`: `2026-07-28`
 - `scope_note`: one real OpenAI OAuth add-account flow verified the current dialog, group selection, configured SOCKS5 proxy selection, and authorization-URL generation; re-observe every dialog state for drift
 
@@ -69,14 +87,15 @@ Prerequisite: logged in on the accounts page.
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current-host ego-browser E2E on sub2api `<sub2api-host>:8080`
-- `as_of`: `2026-07-28`
-- `scope_note`: one real callback submission created the account and passed unique-row, `正常` status, configured group/proxy, and empty-remark readback
+- `status`: `superseded` — use `sub2api-admin-api.mjs create` (exchange-code + accounts.create, API-first, Hard Rule 20). This dialog-fill flow is the fallback only when the API is unreachable.
+- `source`: current-host ego-browser E2E on the configured sub2api instance
+- `as_of`: `2026-08-04`
+- `scope_note`: one real callback submission created the account and passed unique-row, `正常` status, configured group/proxy, and empty-remark readback; the 2026-08-04 fallback run (account #166, add-account dialog) observed the callback textarea auto-extracting the `code` param — writing the full localhost URL (via CDP `Input.insertText` or native setter) leaves the field holding only the ~90-char code value (starts `ac_`), and chunked insertText inserted only partially (90/244, 203/244). Verify the final field value equals the callback's `code` param before clicking 完成授权; the backend accepts the bare code. Also recover the callback from `Page.getNavigationHistory` on the exact tab that rendered the localhost error page — switching tabs first loses the history.
 
 Prerequisite: account dialog remains open and the OpenAI flow returned a callback URL.
 
 1. `snapshotText()` — locate the input labeled "授权链接", "Code", "Authorization URL", or "Callback".
-2. `fillInput` using a ref from that snapshot, without logging the callback URL; then take a fresh snapshot to verify field state.
+2. `fillInput` using a ref from that snapshot, without logging the callback URL; then take a fresh snapshot to verify field state. In the 添加账号 dialog the textarea may auto-extract the `code` param from a full callback URL and drop partial insertText writes; after any fill, require `field.value === <code param>` before submitting (see scope note).
 3. Click the current "完成授权" or equivalent submit ref.
 4. Require the dialog to close and an account-created success signal.
 5. Search for the exact account identifier, require exactly one matching row with status `正常`, then open its edit dialog and require the remark field to be empty.
@@ -85,9 +104,9 @@ Prerequisite: account dialog remains open and the OpenAI flow returned a callbac
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current ego-browser E2E from sub2api authorization URL through OpenAI MFA and consent; 2026-07-31 reauth runs confirmed password handling and account_deactivated detection; 2026-08-03 live account-chooser run exposed an inherited previous identity and successfully routed through `登录至另一个帐户`
-- `as_of`: `2026-08-03`
-- `scope_note`: email login, password login, MFA transition, consent, account chooser, and account_deactivated detection verified; task-space creation did not guarantee a fresh OpenAI identity; password field requires native setter (fillInput doubles value); form submission requires requestSubmit (click triggers sentinel timeout); OpenAI UI remains drift-prone, so re-observe before every action
+- `source`: current ego-browser E2E from sub2api authorization URL through OpenAI MFA and consent; 2026-07-31 reauth runs confirmed password handling and account_deactivated detection; 2026-08-03 live account-chooser run exposed an inherited previous identity and successfully routed through `登录至另一个帐户`; 2026-08-06 UPI iCloud batch (#174-#177) driven by `scripts/flow-login.mjs`, 4/4 first-attempt successes
+- `as_of`: `2026-08-06`
+- `scope_note`: email login, password login, MFA transition, consent, account chooser, and account_deactivated detection verified; task-space creation did not guarantee a fresh OpenAI identity; password field requires native setter (fillInput doubles value); form submission requires requestSubmit (click triggers sentinel timeout); 2026-08-05 reauth of 4 accounts (#169/#171/#172/#173): every timed-out form step recovered by reopening the authorization URL fresh, while the 重试-restored page always timed out again (half-hydrated, submissions fall through to sentinel-blocked native POST) — see Hard Rule 23; OpenAI UI remains drift-prone, so re-observe before every action
 
 Page: authorization URL generated by sub2api. Do not log the full URL.
 
@@ -96,7 +115,7 @@ Page: authorization URL generated by sub2api. Do not log the full URL.
 3. `snapshotText()` — if a Cloudflare or CAPTCHA challenge is present, follow the "CAPTCHA & Cloudflare Automation" pattern below. Only after all automated rounds are exhausted should the agent hand off the task space.
 4. If the latest snapshot shows an account chooser (`Choose an account` / `选择一个帐户`), compare every provider-visible email with the exact target Base email. If none exactly matches, click `Log in to another account` / `登录至另一个帐户` from that latest snapshot and verify transition to the email-login form. Do not select an inherited previous account. If one exactly matches, it may be selected only after that exact comparison succeeds.
 5. From the latest login-form snapshot, find the email input (`input[name="email"]`, `input[name="username"]`, `input[type="email"]`, or observed equivalent), fill the account email, and observe again.
-6. Click the current Continue/Next/继续 ref; wait 2–3 seconds and take a fresh snapshot. **Do not replace this form step with a standalone `POST /api/accounts/authorize/continue` fetch.** A 2026-08-03 probe proved that driving the email step via direct fetch and then hard-navigating to `/log-in/password` forks the server-side login-flow state: the email step returns `200 login_password`, but every later password verify fails with `401 invalid_username_or_password` even for the byte-exact correct password. Let the page's own flow perform the step. If the form Continue times out (`Operation timed out`), click 重试 once; if it still fails, close the tab, reopen the authorization URL, and redo the form flow from the start instead of bypassing it.
+6. Click the current Continue/Next/继续 ref; wait 2–3 seconds and take a fresh snapshot. **Do not replace this form step with a standalone `POST /api/accounts/authorize/continue` fetch.** A 2026-08-03 probe proved that driving the email step via direct fetch and then hard-navigating to `/log-in/password` forks the server-side login-flow state: the email step returns `200 login_password`, but every later password verify fails with `401 invalid_username_or_password` even for the byte-exact correct password. Let the page's own flow perform the step. If the form Continue times out (`Operation timed out`), click 重试 at most once; if it still fails, reopen the authorization URL fresh (`openOrReuseTab(authUrl)`) and redo the form flow from the start instead of bypassing it (Hard Rule 23 — the 重试-restored page is half-hydrated and keeps timing out).
 7. If "Continue with password", "使用密码继续", or "Use password instead" appears, click its current ref and observe again.
 8. Locate the password input (`input[name="current-password"]`) in the latest snapshot. **Do not use `fillInput`** — set the password via `js()` native setter (see Browser Operating Contract §11). Verify `input.value.length` matches the expected credential length.
 9. Submit via `js()`: `document.querySelector('form').requestSubmit(document.querySelector('button[name="intent"]'))`. Do not use ego-browser `click()` on the submit button (see Browser Operating Contract §12). Wait 3–5 seconds, then `snapshotText()` and `pageInfo()` to determine the next state: MFA, email verification, phone binding, consent, callback redirect, or account_deactivated.
@@ -122,9 +141,9 @@ Trigger: after password submission via `requestSubmit`, the page displays `accou
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current ego-browser E2E against `2fa.nloop.cc`; 2026-08-03 user correction during account #162 reauth confirmed MFA should be preferred over email OTP when OpenAI offers it
-- `as_of`: `2026-08-03`
-- `scope_note`: one real account query produced exactly one TOTP result with a countdown and code button, and the submitted code transitioned OpenAI to consent; zero/multiple-result behavior remains unverified; email-helper fallback is not preferred and observed unreliable for iCloud (see email OTP note)
+- `source`: current ego-browser E2E against `2fa.nloop.cc`; 2026-08-03 user correction during account #162 reauth confirmed MFA should be preferred over email OTP when OpenAI offers it; 2026-08-06 UPI iCloud batch (#174-#177) driven by `scripts/flow-mfa.mjs`, 4/4 codes accepted first try
+- `as_of`: `2026-08-06`
+- `scope_note`: one real account query produced exactly one TOTP result with a countdown and code button, and the submitted code transitioned OpenAI to consent (repeated for two more accounts on 2026-08-04, four more on 2026-08-05, and four more on 2026-08-06); zero/multiple-result behavior remains unverified; email-helper fallback is not preferred and observed unreliable for iCloud (see email OTP note). The page has TWO email inputs with the same `example@gmail.com` placeholder — the left 手动绑定 form and the right 粘贴邮箱 query panel; only the 粘贴邮箱 panel produces query results (2026-08-04 icloud batch: filling the wrong input caused a silent no-result polling loop; the correct panel returned exactly one result per account). When the observed countdown is below ~5 s, wait for the refreshed code before extraction — a code submitted with 1 s left was accepted only after the automatic refresh wait (2026-08-05 #173)
 - `prior_source`: artifact `codex-clipboard-85456eba-d2dd-486e-9c02-863d00ebc6c3.png`; source system `链动小铺 order-detail page`; order `LD26072731CVWM`
 - `prior_source_sha256`: `3aca992604ab571a012576ea7ce4816aa543109209ab8ce856e383a385fbe184`
 
@@ -132,7 +151,7 @@ Verified trigger: the latest OpenAI snapshot shows the authenticator challenge, 
 
 1. Normalize the Base URL cell before browser use. When it is a Markdown link, prefer the parenthesized target; validate the expected HTTPS origin and do not print the URL.
 2. Open the configured MFA platform URL in a new tab within the same task space. If Base `mfa_platform_url` is empty, use `https://2fa.nloop.cc/`.
-3. `snapshotText()` — locate the query input in the `粘贴邮箱` panel. If absent, stop this pattern and re-observe.
+3. `snapshotText()` — locate the query input in the `粘贴邮箱` panel. Anchor on the unique text `等待邮箱` (the first `粘贴邮箱` string occurrence in the snapshot is usually the descriptive 使用方式 copy "直接在右侧粘贴邮箱查看验证码", not the panel); the real query panel renders 粘贴邮箱 plus 等待邮箱 together, with the email textbox right after. Never use the identically-placeholdered 手动绑定 form input on the left. If absent, stop this pattern and re-observe.
 4. Fill the account email using a ref from the latest snapshot, wait 2–3 seconds, and take a fresh snapshot.
 5. Require the page to report exactly one result. Stop on zero or multiple results rather than guessing.
 6. Require one six-digit code button and an observed countdown. If the remaining time is below 5 seconds, wait for and verify a refreshed code before extraction.
@@ -159,9 +178,9 @@ Use only after MFA/TOTP is unavailable, returned no result, or failed observably
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: three completed phone bindings on 2026-08-04 through the chongpt.xyz redemption-code channel (sub2api #163/#164/#165); original screenshot hypothesis retained for the sms369-style direct channel, which still has no live evidence
-- `as_of`: `2026-08-04`
-- `scope_note`: live-verified flow: OpenAI shows `电话号码是必填项` (`auth.openai.com/add-phone`) with a country selector defaulting to `美国 (+1)` and one national-number input (`input[name="__reservedForPhoneNumberInput_tel"]`); filling the 10-digit national part via native setter + `requestSubmit` reaches `查看你的手机` (`auth.openai.com/phone-verification`) with `input[name=code]`; SMS codes from the redeemed chongpt number were accepted first try all three times. Rejection/retry branches (`recently used`, 3-number rotation) remain unobserved
+- `source`: four completed phone bindings on 2026-08-04 through the chongpt.xyz redemption-code channel (sub2api #163/#164/#165, plus #166 using a number still inside its 3-day cooldown window); two more on 2026-08-06 (#174/#177), both with numbers deep inside cooldown (~39 h remaining) accepted by OpenAI; original screenshot hypothesis retained for the sms369-style direct channel, which still has no live evidence
+- `as_of`: `2026-08-06`
+- `scope_note`: live-verified flow: OpenAI shows `电话号码是必填项` (`auth.openai.com/add-phone`) with a country selector defaulting to `美国 (+1)` and one national-number input (`input[name="__reservedForPhoneNumberInput_tel"]`); filling the 10-digit national part via native setter reaches `查看你的手机` (`auth.openai.com/phone-verification`) with `input[name=code]`; SMS codes from the redeemed chongpt number were accepted first try all four times. 2026-08-04 additions (#166): the tel input auto-formats the 10-digit national part to `(xxx) xxx-xxxx` (value length 14); the add-phone 继续 button has NO `name=intent` — submit via `form.requestSubmit(btn)` with the button located by text 继续; a number inside its post-bind cooldown window was accepted and bound successfully (OpenAI does not always enforce the cooldown); new permanent rejection observed `此电话号码已关联到可关联的最多账户` on a Base-`available` sms24.uk number (mark `exhausted`, `bind_count` unchanged); one SMS delivery exceeded the 120 s poll window — poll on `已收到`/`验证码已收到` markers plus the read-only 验证码 input (6 ASCII digits, verify by codepoints) instead of a single regex. 2026-08-06 additions (#174/#177): select the 短信 radio (`[role="radio"]` whose nearest label text contains 短信) before submitting; detect code-sent ONLY by URL `/phone-verification` + `input[name="code"]` — the string 一次性验证码 appears in the add-phone page copy and false-positives (Hard Rule 25); with a restored chongpt slot the first visible code is usually stale — wait for a changed code after 刷新验证码 (Hard Rule 24). Rejection/retry branches (`recently used`, 3-number rotation) remain unobserved
 - `capture_method`: user-provided clipboard screenshot; received `2026-07-28`; exact capture time unavailable
 - `redaction_note`: original image contains live phone/SMS access data and is not committed; only provenance and hash are recorded
 - `source_sha256`: `8d5c16be8e3c31f96fdaff1125f183d002de2276b4a2889b4eb215ca1b74ff2b`
@@ -171,10 +190,10 @@ Hypothesized trigger: the latest snapshot or screenshot shows "phone number", "C
 1. Query Feishu Base for currently available SIM cards; use only authorized real records and preserve their provenance.
 2. Pick the best number according to the verified SIM-pool rules; do not invent a number or status.
 3. `snapshotText()` — locate the phone input and observe actual country-code handling before acting. Do not assume whether a dropdown or `+1` prefix exists.
-4. Fill the number using a current ref, observe again, click the current Continue/Send code ref, wait 3 seconds, and verify the resulting OpenAI state.
+4. Fill the 10-digit national part via the native setter (the input auto-formats to `(xxx) xxx-xxxx`, value length 14), observe again, then submit. On `add-phone` the 继续 button has no `name=intent` attribute — use `form.requestSubmit(btn)` with the button located by text 继续. Wait 3–7 seconds and verify the resulting OpenAI state (`查看你的手机` with `input[name=code]`, or an inline rejection list item).
 5. Open the configured SMS URL in a new tab in the same task space without logging the full token URL.
-6. For at most 120 seconds, every 5 seconds take a fresh SMS-tab snapshot and inspect the actual response for a 4–8 digit code. Do not reuse refs across snapshots.
-7. If the observed provider/OpenAI response identifies the number as rejected (for example, "无法向此号码发送验证码" or "This phone number was recently used"), return `PHONE_REJECTED`.
+6. For at most 120 seconds, every 5 seconds take a fresh SMS-tab snapshot and inspect the actual response for a 4–8 digit code. Do not reuse refs across snapshots. SMS delivery can exceed 120 s (observed once on 2026-08-04); extend the window while the platform still shows a waiting state.
+7. If the observed provider/OpenAI response identifies the number as rejected, classify by the exact message: the max-linked rejection `此电话号码已关联到可关联的最多账户` is permanent — mark the SIM `exhausted` with `bind_count` unchanged and try the next eligible number; recoverable rejections (for example "无法向此号码发送验证码" or "This phone number was recently used") return `PHONE_REJECTED`.
 8. On `PHONE_REJECTED`, update the real SIM record to recoverable `status=cooldown` and `cooldown_until=now+1 hour`; never mark it permanently unavailable. Read back both fields, choose another eligible number, and retry from phone entry, up to 3 total numbers.
 9. When a code is observed, switch to the OpenAI tab, take a fresh snapshot, fill the code using a current ref, click the current Continue ref, and verify the next state.
 10. If 3 verified attempts are exhausted and no more eligible SIMs exist in the pool, set the account to `sub2api_status=waiting_sim` with `waiting_since=<now>` and read back. If more eligible SIMs remain, continue trying. Do not infer exhaustion from an unobserved screenshot hypothesis.
@@ -183,9 +202,9 @@ Hypothesized trigger: the latest snapshot or screenshot shows "phone number", "C
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current ego-browser E2E from OpenAI consent to localhost callback; 2026-08-03 duplicate-identity incident and corrected fresh-login run
-- `as_of`: `2026-08-03`
-- `scope_note`: consent submission redirected to the localhost callback; Chromium rendered `ERR_CONNECTION_REFUSED`, so the original callback was recovered from navigation history; one real mismatch showed that consent must be blocked until provider-visible identity exactly matches the target Base email
+- `source`: current ego-browser E2E from OpenAI consent to localhost callback; 2026-08-03 duplicate-identity incident and corrected fresh-login run; 2026-08-06 four consecutive runs via `scripts/flow-consent.mjs` (#174-#177), identity gate + nav-history callback recovery held in all four
+- `as_of`: `2026-08-06`
+- `scope_note`: consent submission redirected to the localhost callback; Chromium rendered `ERR_CONNECTION_REFUSED` in every observed run (nothing listens on :1455), so the original callback must be recovered from CDP `Page.getNavigationHistory` — treat this as the normal path, not an edge case; one real mismatch showed that consent must be blocked until provider-visible identity exactly matches the target Base email
 
 Triggered when the latest snapshot shows a consent control such as "Continue", "Allow", "Authorize", "授权", or "Accept", and `pageInfo()` confirms an OpenAI authentication origin or observed equivalent.
 
@@ -219,9 +238,9 @@ Page example, redacted: `https://sms369.vip/api/sms/access?token=xxx`
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: user delivery paste (2026-08-04), live site bundle analysis, and three completed redemption→bind→readback runs on 2026-08-04 (sub2api #163/#164/#165, all SSE test_complete success=true)
-- `as_of`: `2026-08-04`
-- `scope_note`: full channel path live-verified three times in one session: redeem → number assignment → OpenAI phone entry → SMS code fetch → bind success. Site UI remains third-party and drift-prone; re-observe before each action. Redemption consumes a code: only redeem a Base row that is actively being used for a phone binding attempt
+- `source`: user delivery paste (2026-08-04), live site bundle analysis, and three completed redemption→bind→readback runs on 2026-08-04 (sub2api #163/#164/#165), and two slot-restoration binds on 2026-08-06 (#174/#177, all SSE test_complete success=true)
+- `as_of`: `2026-08-06`
+- `scope_note`: full channel path live-verified three times in one session: redeem → number assignment → OpenAI phone entry → SMS code fetch → bind success; slot restoration (re-verify stored CDK → 开始接收 → code fetch) live-verified twice more on 2026-08-06. Site UI remains third-party and drift-prone; re-observe before each action. Redemption consumes a code: only redeem a Base row that is actively being used for a phone binding attempt. STALE-CODE TRAP (Hard Rule 24, proven 2026-08-06 #174): a restored slot displays the previous session's code first — submitting it to OpenAI yields 验证码错误; record the displayed code, click 刷新验证码, and only use a code different from it
 - `redaction_note`: redemption codes are bearer credentials; never print them
 
 Channel contract (from delivery text): number valid 25–29 days; unlimited code fetches within validity. Flow: redeem code → platform assigns a number → OpenAI sends SMS → fetch code from the platform page.
@@ -231,12 +250,12 @@ UI strings observed in the site bundle (Chinese): `请填写 CDK`, `CDK 未验�
 Redemption sequence (live-verified 2026-08-04):
 1. `openOrReuseTab` the Base row's `redeem_url` (origin `chongpt.xyz`) in the reused task space; `snapshotText()` to locate the CDK input.
 2. Re-read the selected SIM row's `redeem_code` process-local by exact `record_id`; fill it via native setter into `input[placeholder*="CDK"]` and click the `验证` button. Do not log the code.
-3. Success shows alert `CDK <code> 已验证通过` and the slot view (`SMS NUMBER`, `槽位 #1`). If it reports invalid/expired CDK (`验证失败`, `号码已过期`, `session验证失败`), mark the Base SIM row `status=unavailable` with a redacted note and return to SIM selection.
+3. Success shows alert `CDK <code> 已验证通过` and the slot view (`SMS NUMBER`, `槽位 #1`). If it reports invalid/expired CDK (`验证失败`, `号码已过期`, `session验证失败`), mark the Base SIM row `status=unavailable` with a redacted note and return to SIM selection. An already-redeemed CDK can be re-verified later to restore its slot: on 2026-08-04 (account #166) re-entering the stored CDK again showed `已验证通过` and the slot with the previously assigned number; click `开始接收` again before expecting SMS. This restoration path is live-verified once; durability across the whole validity window is unproven.
 4. Two observed number-assignment shapes: (a) number already displayed with status `未开始`; (b) `开始接收后分配号码` — number appears only after clicking `开始接收`. In both cases click `开始接收`; status becomes `等待中` and the `开始接收` button turns into `刷新验证码`. Extract the `+1...` number and the `有效期至 YYYY-MM-DD HH:mm:ss` line; correct the Base row's `valid_until` from it (observed batch expiry applied to all codes of one order, i.e. the clock starts at order generation, not redemption).
 5. Write the observed `phone_number` (and observed page URL if per-number) back to the exact SIM record before returning to the OpenAI tab for phone entry.
 
-Code-fetch sequence after OpenAI sends the SMS (live-verified; codes arrived within ~30 s all three times):
-1. On the platform tab, click `刷新验证码` and poll every 5 s up to 120 s. The code appears as the value of the 验证码 textbox (`input` whose value matches `^\d{4,8}$`); page text also flips to `已收到`.
+Code-fetch sequence after OpenAI sends the SMS (live-verified; codes arrived within ~30 s for #163/#164/#165; the #166 code arrived after the 120 s window while refresh clicks continued):
+1. On the platform tab, click `刷新验证码` (label may read `再次接收` before any code has arrived) and poll every 5 s up to 120 s. The code appears as the value of the read-only 验证码 textbox (6 ASCII digits — verify by codepoints when a `^\d{4,8}$` test unexpectedly fails); page text also flips to `已收到`/`验证码已收到`. Match those markers as well as the input value; do not rely on a single regex.
 2. Extract the code silently, switch to the OpenAI tab, fill `input[name=code]`, and continue. Treat `待人工确认` as a platform-side block: retry once later, then try another SIM row.
 3. Note: the success alert and page text echo the redeemed CDK in clear text; do not dump page text containing it into logs.
 

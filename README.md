@@ -12,6 +12,8 @@ A collection of automation skills for AI agents. Each skill is self-contained wi
 
 Each skill lives in `skills/<name>/` with its own `README.md` for usage instructions. Skills with `package.json` need `npm install` before running.
 
+Hourly reauth automation: launchd job `com.kinso.sub2api-reauth` runs `src/sub2api-reauth-runner.mjs` (monitor + silent-refresh recovery, then a headless Flow C agent when accounts need interactive reauth). See the skill's `Scheduled Reauth Automation` section; logs in `state/reauth-runner.log`.
+
 ## Adding a New Skill
 
 1. Create `skills/<skill-name>/` directory
