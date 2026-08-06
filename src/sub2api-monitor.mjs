@@ -181,8 +181,7 @@ const note = (mod, entry) => report.modules[mod].push(entry);
 async function main() {
   const state = loadState();
   const now = Date.now();
-  const list = await listAccounts({});
-  const accounts = list.items || list.data?.items || [];
+  const accounts = await listAccounts({});
   const baseIndex = loadBaseIndex();
   const byEmail = new Map(accounts.map((a) => [accountEmail(a), a]));
 

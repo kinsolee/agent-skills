@@ -199,15 +199,29 @@ export async function getAccount(id) {
   return adminFetch(`/api/v1/admin/accounts/${id}`, { apiKey, adminBase });
 }
 
-export async function listAccounts({ search, platform = "openai", status, group } = {}) {
+export async function listAccounts({ search, platform = "openai", status, group, limit = 200, maxPages = 100 } = {}) {
+  // The admin REST API caps the default page at 20 — without explicit pagination we silently
+  // miss accounts past that boundary, including their error states (proven 2026-08-07: the
+  // monitor missed #175 because it lived on page 2). Iterate every page and return a flat array.
   const { adminBase, apiKey } = resolveConfig();
-  const params = new URLSearchParams();
-  if (search) params.set("search", search);
-  if (platform) params.set("platform", platform);
-  if (status) params.set("status", status);
-  if (group) params.set("group", String(group));
-  const qs = params.toString();
-  return adminFetch(`/api/v1/admin/accounts${qs ? `?${qs}` : ""}`, { apiKey, adminBase });
+  const out = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (platform) params.set("platform", platform);
+    if (status) params.set("status", status);
+    if (group) params.set("group", String(group));
+    params.set("limit", String(limit));
+    params.set("page", String(page));
+    const r = await adminFetch(`/api/v1/admin/accounts${params.toString() ? `?${params}` : ""}`, { apiKey, adminBase });
+    const items = Array.isArray(r) ? r : (r.items || []);
+    out.push(...items);
+    // Unpaginated responses arrive as a bare array — single round trip, stop.
+    if (Array.isArray(r) || items.length === 0) break;
+    const totalPages = Number(r.pages ?? 1);
+    if (page >= totalPages) break;
+  }
+  return out;
 }
 
 export async function setSchedulable({ id, schedulable }) {
@@ -438,7 +452,7 @@ async function main() {
       result = await getAccount(num(args.id));
       break;
     case "list":
-      result = await listAccounts({ search: args.search, platform: args.platform });
+      result = await listAccounts({ search: args.search, platform: args.platform, limit: num(args.limit) || 200 });
       break;
     case "test":
       result = await testAccount(num(args.id), { modelId: args.modelId });
