@@ -57,11 +57,13 @@ else {
     const d = document.getElementById('codeDisplay');
     const s = document.getElementById('secretInput');
     const t = document.getElementById('timeRemaining');
+    // Note: location.hash (the URL fragment = per-account TOTP seed) is intentionally
+    // omitted — Hard Rule 4 forbids token-bearing URL parts in stdout. Fragment presence
+    // is validated by the host script before launching the browser.
     return JSON.stringify({
       codeText: d ? d.innerText : null,
       hasSecret: s ? (s.value || '').length : 0,
       timeText: t ? t.innerText : null,
-      hash: location.hash || '',
     });
   })()\`);
   cliLog('probe=' + mask(probe).slice(0, 220));
