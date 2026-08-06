@@ -28,6 +28,13 @@ const MONITOR_SCRIPT = path.join(HERE, "sub2api-monitor.mjs");
 const MAX_ATTEMPTS = 3;
 const LOCK_TTL_MS = 2 * 60 * 60 * 1000; // 2 h (agent runs are capped at 90 min)
 const AGENT_TIMEOUT_MS = 90 * 60 * 1000;
+// Modes: full (default, launchd path: monitor -> spawn headless codex exec agent)
+//        --monitor-only   (Codex heartbeat path: monitor + report queue as JSON, no nested agent;
+//                          the calling Codex task itself performs the interactive Flow C)
+//        --post-reconcile (Codex heartbeat path: re-run monitor after interactive work and
+//                          account attempts/parking for last_eligible)
+const MODE = process.argv.includes("--monitor-only") ? "monitor-only"
+  : process.argv.includes("--post-reconcile") ? "post-reconcile" : "full";
 
 const nowLocal = () => {
   const d = new Date();
@@ -75,32 +82,66 @@ function runMonitor(label) {
 // --- main -------------------------------------------------------------------
 if (!acquireLock()) process.exit(0);
 try {
-  runMonitor("preflight");
-  const mstate = readJson(MONITOR_STATE_FILE, { needs_interactive_reauth: [] });
-  const queue = mstate.needs_interactive_reauth || [];
-  const rstate = readJson(RUNNER_STATE_FILE, { attempts: {}, parked: [] });
-  rstate.attempts = rstate.attempts || {};
-  rstate.parked = rstate.parked || [];
-
-  // Reconcile: accounts that left the queue are recovered — clear their attempt history.
-  const queuedIds = new Set(queue.map((q) => q.id));
-  for (const id of Object.keys(rstate.attempts)) if (!queuedIds.has(Number(id))) delete rstate.attempts[id];
-  rstate.parked = rstate.parked.filter((p) => queuedIds.has(p.id));
-
-  if (queue.length === 0) {
-    log("no accounts need interactive reauth — done");
+  if (MODE === "post-reconcile") {
+    runMonitor("post-agent reconcile");
+    const after = readJson(MONITOR_STATE_FILE, { needs_interactive_reauth: [] });
+    const stillQueued = new Set((after.needs_interactive_reauth || []).map((q) => q.id));
+    const rstate = readJson(RUNNER_STATE_FILE, { attempts: {}, parked: [], last_eligible: [] });
+    rstate.attempts = rstate.attempts || {};
+    rstate.parked = rstate.parked || [];
+    for (const q of rstate.last_eligible || []) {
+      if (stillQueued.has(q.id)) {
+        const a = rstate.attempts[q.id] || { count: 0 };
+        a.count += 1;
+        a.last_at = nowLocal();
+        rstate.attempts[q.id] = a;
+        log(`#${q.id} still in error after attempt ${a.count}/${MAX_ATTEMPTS}`);
+        if (a.count >= MAX_ATTEMPTS && !rstate.parked.some((p) => p.id === q.id)) rstate.parked.push({ id: q.id, email_masked: q.email_masked, parked_at: nowLocal() });
+      } else {
+        log(`#${q.id} recovered — cleared from reauth queue`);
+      }
+    }
+    rstate.last_eligible = [];
     writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
-    process.exit(0);
-  }
+    log("post-reconcile complete");
+  } else {
+    runMonitor("preflight");
+    const mstate = readJson(MONITOR_STATE_FILE, { needs_interactive_reauth: [] });
+    const queue = mstate.needs_interactive_reauth || [];
+    const rstate = readJson(RUNNER_STATE_FILE, { attempts: {}, parked: [], last_queue: [] });
+    rstate.attempts = rstate.attempts || {};
+    rstate.parked = rstate.parked || [];
 
-  const eligible = queue.filter((q) => (rstate.attempts[q.id]?.count || 0) < MAX_ATTEMPTS && !rstate.parked.some((p) => p.id === q.id));
-  const parkedNow = queue.filter((q) => !eligible.includes(q));
-  for (const p of parkedNow) log(`#${p.id} ${p.email_masked} parked after ${rstate.attempts[p.id]?.count ?? MAX_ATTEMPTS} failed attempts — needs human attention`);
-  if (eligible.length === 0) {
-    log("all queued accounts parked — no agent run");
-    writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
-    process.exit(0);
-  }
+    // Reconcile: accounts that left the queue are recovered — clear their attempt history.
+    const queuedIds = new Set(queue.map((q) => q.id));
+    for (const id of Object.keys(rstate.attempts)) if (!queuedIds.has(Number(id))) delete rstate.attempts[id];
+    rstate.parked = rstate.parked.filter((p) => queuedIds.has(p.id));
+    const recovered = (rstate.last_queue || []).filter((id) => !queuedIds.has(id));
+    for (const id of recovered) log(`#${id} recovered — cleared from reauth queue`);
+    rstate.last_queue = [...queuedIds];
+
+    if (queue.length === 0) {
+      log("no accounts need interactive reauth — done");
+      writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
+      if (MODE === "monitor-only") console.log(JSON.stringify({ silent_recovered: recovered, queue: [], parked: rstate.parked }));
+      process.exit(0);
+    }
+
+    const eligible = queue.filter((q) => (rstate.attempts[q.id]?.count || 0) < MAX_ATTEMPTS && !rstate.parked.some((p) => p.id === q.id));
+    const parkedNow = queue.filter((q) => !eligible.includes(q));
+    for (const p of parkedNow) log(`#${p.id} ${p.email_masked} parked after ${rstate.attempts[p.id]?.count ?? MAX_ATTEMPTS} failed attempts — needs human attention`);
+    if (MODE === "monitor-only") {
+      rstate.last_eligible = eligible.map((q) => ({ id: q.id, email_masked: q.email_masked }));
+      writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
+      console.log(JSON.stringify({ silent_recovered: recovered, queue: eligible, parked: rstate.parked }));
+      log(`monitor-only: ${eligible.length} account(s) queued for the calling Codex task — no nested agent spawn`);
+      process.exit(0);
+    }
+    if (eligible.length === 0) {
+      log("all queued accounts parked — no agent run");
+      writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
+      process.exit(0);
+    }
 
   const accountList = eligible.map((q) => `#${q.id} (${q.email_masked})`).join(", ");
   const prompt = [
@@ -144,8 +185,10 @@ try {
       log(`#${q.id} recovered — cleared from reauth queue`);
     }
   }
+  rstate.last_queue = [...(readJson(MONITOR_STATE_FILE, { needs_interactive_reauth: [] }).needs_interactive_reauth || []).map((q) => q.id)];
   writeFileSync(RUNNER_STATE_FILE, JSON.stringify(rstate, null, 2), { mode: 0o600 });
   log("run complete");
+  }
 } catch (err) {
   log(`runner fatal: ${String(err.stack || err.message || err).slice(0, 500)}`);
   process.exitCode = 1;

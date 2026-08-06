@@ -45,12 +45,8 @@ Resolve at runtime via lark-cli (no .env tokens needed):
 1. `lark-cli base +title-resolve --title "sub2api-auth" --as user` → `base_token`
 2. `lark-cli base +base-block-list --base-token <base_token> --as user` → table IDs for `gpt_accounts` and `sim_cards`
 3. Cache resolved IDs in the running task context for the session.
-4. `SUB2API_ADMIN_URL` defaults to `http://<sub2api-host>:8080/admin/accounts`; read from `.env` only if overridden.
-5. `SUB2API_ADMIN_API_KEY` (admin REST API key, `x-api-key` header) and
-   `SUB2API_ADMIN_BASE` (instance origin, e.g. `http://<sub2api-host>:8080`) live in
-  `.env` (gitignored). The automation calls the admin API directly through
-  `src/sub2api-admin-api.mjs`; no browser login to the admin panel is needed.
-  Never print the key. See `references/sub2api-admin-api.md`.
+4. The sub2api instance address is configuration, not code — there is NO hardcoded default. `SUB2API_ADMIN_BASE` (instance origin) or the legacy `SUB2API_ADMIN_URL` (panel URL; any `/admin/accounts` tail is stripped) must be set in `.env` (gitignored) or the process environment; `src/sub2api-admin-api.mjs` fails fast with a clear error when unset.
+5. `SUB2API_ADMIN_API_KEY` (admin REST API key, `x-api-key` header) lives in the same `.env`. The automation calls the admin API directly through `src/sub2api-admin-api.mjs`; no browser login to the admin panel is needed. Never print the key or the instance URL values. See `references/sub2api-admin-api.md` and `.env.example` for the key inventory.
 
 ## Reusable Scripts — check `scripts/` before writing anything
 
@@ -67,13 +63,15 @@ Resolve at runtime via lark-cli (no .env tokens needed):
 
 ## Scheduled Reauth Automation
 
-An hourly launchd job (`com.kinso.sub2api-reauth`) runs `src/sub2api-reauth-runner.mjs` from the project root (`/Users/kinso/code/projects/sub2api-auto-auth`):
+Primary scheduler (since 2026-08-06): a **Codex hourly heartbeat automation** (`sub2api 每小时重新授权巡检`, attached to the sub2api working task) runs the patrol visibly inside the Codex app — every hourly run reports silent recoveries, per-account interactive reauth outcomes, and parked accounts directly in the task, so success/failure is always observable. Each patrol:
 
-1. Runs `src/sub2api-monitor.mjs` — silent admin-API refresh recovery for error-state accounts (Flow C step 0), expired removal, config and capacity checks.
-2. Reads `state/monitor-state.json` → `needs_interactive_reauth` (accounts whose refresh token is revoked and which require this skill's browser Flow C).
-3. Only when that queue is non-empty, spawns a headless `codex exec` agent with this skill's Flow C for the queued accounts (per-account attempt tracking in `state/reauth-runner-state.json`; an account failing 3 consecutive hourly attempts is parked for human attention instead of being retried).
+1. `node src/sub2api-reauth-runner.mjs --monitor-only` — runs `src/sub2api-monitor.mjs` (silent admin-API refresh recovery for error-state accounts = Flow C step 0, expired removal, config and capacity checks), reconciles the queue, and prints one JSON line: `{silent_recovered, queue, parked}`. It never spawns a nested agent in this mode.
+2. If `queue` is empty: append the run to `state/reauth-history.jsonl` and report one line.
+3. If `queue` is non-empty: the Codex task itself performs Flow C for each queued account using the Reusable Scripts (`flow-login.mjs`, `flow-mfa.mjs`, `flow-consent.mjs --mode apply`, `repair-mapping.mjs`), then `node src/sub2api-reauth-runner.mjs --post-reconcile` re-runs the monitor and updates per-account attempt tracking in `state/reauth-runner-state.json` (an account failing 3 consecutive hourly attempts is parked for human attention instead of being retried).
 
-The agent run is fully unattended: CAPTCHA/slider/handoff situations must be resolved automatically per the Error Recovery table or the affected account is marked `manual_required` in Base and skipped — there is no interactive user to hand off to. The reauth agent drives the browser through the Reusable Scripts (`flow-login.mjs`, `flow-mfa.mjs`, `flow-consent.mjs --mode apply`, `repair-mapping.mjs`). Logs: `state/reauth-runner.log`, agent final message at `state/reauth-agent-last-message.md`.
+The patrol is fully unattended: CAPTCHA/slider/handoff situations must be resolved automatically per the Error Recovery table or the affected account is marked `manual_required` in Base and skipped — there is no interactive user to hand off to. Records: per-run JSON lines in `state/reauth-history.jsonl`, runner detail in `state/reauth-runner.log`, and the visible hourly report in the Codex task.
+
+Fallback/legacy: the launchd job `com.kinso.sub2api-reauth` (runs the same runner in `full` mode, which spawns a headless `codex exec` agent when the queue is non-empty) is **disabled** (`launchctl bootout`, 2026-08-06) because its headless runs left no user-visible record; its plist remains at `~/Library/LaunchAgents/com.kinso.sub2api-reauth.plist` and can be reloaded if the Codex app will be closed for extended periods (Codex automations only fire while the app is running). Never enable both schedulers at once.
 
 ## When to Use
 
