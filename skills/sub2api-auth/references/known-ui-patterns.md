@@ -234,6 +234,23 @@ Page example, redacted: `https://sms369.vip/api/sms/access?token=xxx`
 4. For observed JSON, use a single explicit `js()` IIFE or `browserFetch()` in the authenticated page context to inspect the real response shape, redacting tokens and unrelated message content from logs.
 5. Verify the extracted code against the displayed/returned message before use. A successful first probe may justify updating this pattern with the actual DOM or response schema and new provenance.
 
+## SMS Platform — k.sms688.cc (Web Inbox Mode)
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: account #185 (ceciliabevacqua0@gmail.com + SIM 134***16, channel=direct, sub2api-auth #185 created 2026-08-07 20:21). Live SMS code observed at `elapsed=11s` after explicit OpenAI `重新发送短信` click + `cdp('Page.reload')` reload.
+- `as_of`: `2026-08-07`
+- `scope_note`: the inbox page is server-rendered HTML with no client-side refresh; the only way to read the current inbox state is to re-issue the HTTP GET. Hard Rule 29 captures this: `snapshotText()` and `openOrReuseTab(url)` are NOT refreshes — use `cdp('Page.reload')` on the active tab each round. Hard Rule 30 captures the explicit `重新发送短信` click requirement on the OpenAI side. Poll cadence: ~3 s reload + ~1.5 s settle; hard-cap 90 s. The visible body alternates between `【OpenAI/ChatGPT】暂无短信，到期时间：YYYY-M-D HH:MM` (no SMS) and `【OpenAI/ChatGPT】验证码: NNNNNN, X 秒后过期` (SMS delivered). Codes are 6 ASCII digits surrounded by non-digits. No `刷新验证码`/`再次接收` button exists on the page; the refresh is purely the HTTP GET.
+- `redaction_note`: original URLs are token-bearing and remain process-local per Hard Rule 4 + Hard Rule 22.
+
+Page example, redacted: `https://k.sms688.cc/sms/<token>`
+
+1. Switch to the sms688.cc tab via `switchTab(...)` (use the tab object from `listTabs()`, not an id — Hard Rule 22 sub-(d)).
+2. Force a fresh HTTP GET via `await cdp('Page.reload', { ignoreCache: false })` on that tab (Hard Rule 29).
+3. `await sleep(1500–3000)` to let the round-trip settle, then `snapshotText()` and read the body.
+4. Extract a 6-digit ASCII code via `text.match(/(?:[^0-9]([0-9]{6})[^0-9])/)`. Reject first-displayed stale code per Hard Rule 24 unless `i >= 3` (the chongpt stale-code trap carries over to direct-channel inbox providers).
+5. Hard-cap the loop at 90 s total wall time; classify failure as `cooldown` 1-hour (not 3-day) and write the SIM `notes` with a redacted diagnostic per the SIM Pool Rules.
+
 ## SMS Platform — chongpt.xyz (Redemption-Code Channel)
 
 Evidence:
