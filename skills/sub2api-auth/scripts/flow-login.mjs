@@ -28,9 +28,12 @@ await useOrCreateTaskSpace(${JSON.stringify(Number(spaceId))});
 // fresh load (Hard Rule 23): never submit forms on a retry-restored page
 await openOrReuseTab(AUTH_URL, { wait: true });
 await sleep(4000);
-const elen = await js(String.raw\`(() => { const el = document.querySelector('input[name="email"]'); if (!el) return -1; const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; s.call(el, ${JSON.stringify(EMAIL)}); el.dispatchEvent(new Event('input', { bubbles: true })); return el.value.length; })()\`);
+// 2026-08-10: A fresh OAuth URL can land directly on consent when this isolated
+// space already completed MFA for the same OpenAI identity. Do not submit consent
+// here; flow-consent owns the identity gate, callback capture, and API apply.
+const elen = await js(String.raw\`(() => { const el = document.querySelector('input[name="email"]'); if (!el) { const body = document.body.innerText || ''; return /Continue|继续|Allow|Authorize|授权|Accept/i.test(body) ? 'CONSENT_READY' : -1; } const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; s.call(el, ${JSON.stringify(EMAIL)}); el.dispatchEvent(new Event('input', { bubbles: true })); return el.value.length; })()\`);
 cliLog('email_len=' + elen + '/' + EMAIL.length);
-const esub = await js(String.raw\`(() => { const form = document.querySelector('form'); if (!form) return 'no_form'; const btn = [...form.querySelectorAll('button')].find(x => /继续|Continue|Next/.test(x.innerText || '')) || document.querySelector('button[name="intent"]'); try { form.requestSubmit(btn); return 'submitted'; } catch (e) { return 'err:' + e.message; } })()\`);
+const esub = elen === 'CONSENT_READY' ? 'skipped_existing_consent' : await js(String.raw\`(() => { const form = document.querySelector('form'); if (!form) return 'no_form'; const btn = [...form.querySelectorAll('button')].find(x => /继续|Continue|Next/.test(x.innerText || '')) || document.querySelector('button[name="intent"]'); try { form.requestSubmit(btn); return 'submitted'; } catch (e) { return 'err:' + e.message; } })()\`);
 cliLog('email_submit=' + esub);
 let passReady = false;
 for (let i = 0; i < 15; i++) {

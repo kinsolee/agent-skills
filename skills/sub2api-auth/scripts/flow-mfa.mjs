@@ -34,13 +34,25 @@ else {
   await switchTab(t2fa);
   await sleep(500);
   let snap = String(await snapshotText());
-  const anchor = snap.indexOf('等待邮箱');
-  if (anchor < 0) { cliLog('STOP: 等待邮箱 anchor missing — re-observe the platform page'); }
+  // 2026-08-10: nloop renamed the query-panel status from "等待邮箱" to
+  // "可查询". Both anchors identify the right-side email-query panel.
+  let anchor = -1, m = null;
+  for (let i = 0; i < 5; i++) {
+    anchor = Math.max(snap.lastIndexOf('等待邮箱'), snap.lastIndexOf('可查询'));
+    m = anchor < 0 ? null : snap.slice(anchor, anchor + 500).match(/textbox \\[ref=(\\d+)/);
+    if (m) break;
+    await sleep(1000);
+    snap = String(await snapshotText());
+  }
+  if (anchor < 0) { cliLog('STOP: query-panel anchor missing — re-observe the platform page'); }
   else {
-    const m = snap.slice(anchor, anchor + 400).match(/textbox \\[ref=(\\d+)/);
     cliLog('query_input_ref=' + (m ? m[1] : 'NOT_FOUND'));
-    if (m) {
-      await fillInput('@' + m[1], EMAIL);
+    const queryFilled = m
+      ? (await fillInput('@' + m[1], EMAIL), EMAIL.length)
+      // 2026-08-10: some nloop snapshot rounds expose an unstable textbox
+      // without a reusable ref. Scope the DOM fallback to the 粘贴邮箱 panel.
+      : await js(String.raw\`(() => { const el = [...document.querySelectorAll('input')].find(x => { let p = x; for (let i = 0; i < 5 && p; i++, p = p.parentElement) if ((p.innerText || '').includes('粘贴邮箱')) return true; return false; }); if (!el) return -1; const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; s.call(el, ${JSON.stringify(EMAIL)}); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return el.value.length; })()\`);
+    if (queryFilled === EMAIL.length) {
       await sleep(4000);
       let code = null, countdown = null;
       for (let i = 0; i < 8; i++) {
@@ -87,7 +99,7 @@ else {
           cliLog('SNAP: ' + mask(await snapshotText()).slice(0, 1600));
         }
       }
-    }
+    } else cliLog('NO_QUERY_INPUT');
   }
 }
 `;
