@@ -394,4 +394,18 @@ Evidence:
 
 ---
 
+## ego-browser task-space lifecycle for isolated account flows
+
+Evidence:
+- `evidence_status`: `live_verified`
+- `source`: 2026-08-12 OpenCodex pool reauth run — four accounts across five dedicated spaces, each created, driven, and closed
+- `as_of`: `2026-08-12`
+- `scope_note`: numeric-only IDs never create spaces; creation is name-based, and the assigned numeric id must be passed to the canonical drivers
+
+1. `useOrCreateTaskSpace(<number>)` only reuses an existing space; an unknown numeric id fails with `task space not found`. `claimTaskSpace(id)` likewise claims only an existing space.
+2. Create a dedicated space with a string name: `useOrCreateTaskSpace("<task-name>")` → returns `{ id, name, taskId }`. Pass the returned numeric `id` to `flow-login.mjs` / `flow-mfa.mjs` / `flow-opencodex-consent.mjs`.
+3. Close the space after the account finishes: `completeTaskSpace(id, { keep: false })` — the `{ keep }` argument is mandatory. Spaces can also be auto-reaped between rounds, so re-list with `listTaskSpaces()` instead of assuming a stored id still exists.
+
+---
+
 This file may grow after successful automation runs. Add or promote a pattern only with its new evidence status, source, as-of date, scope note, and successful observe–act–verify/readback evidence.

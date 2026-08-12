@@ -101,6 +101,12 @@ Treat Sub2API and OpenCodex as independent OAuth credential owners even when bot
 
 The 2026-08-12 live comparison found multiple overlapping identities for which Sub2API completed a real upstream usage probe while OpenCodex returned `refresh_failed`. This is strong evidence of credential-generation divergence, but it does not prove the stored tokens were equal or capture the exact rotation response. Verify each platform separately and reauthorize each platform through its own full OAuth persistence flow.
 
+### Identity resolution for pool accounts
+
+`GET /api/codex-auth/accounts` masks every identity with the deployment's `maskEmail` (first local character + `***` + last local character + domain; shorter locals mask further). There is no unmask parameter and no other management route returns full identities. Matching a masked email against a credential book by first/last character is only a hypothesis — it can suggest candidates but never proves identity.
+
+Authoritative read-only resolution: on the deployment host, `~/.opencodex/config.json` → `codexAccounts[]` holds `{ id, email, plan, isMain, logLabel }` for the whole pool, while `~/.opencodex/codex-accounts.json` holds only tokens (`credential: { accessToken, refreshToken, expiresAt, chatgptAccountId }`) and no emails. Resolve pool id → full email in-process over SSH and emit only masked identities (Hard Rule 4). Live-verified 2026-08-12: all eight `refresh_failed` targets mapped to their Feishu Base records this way after masked-email matching had produced zero results.
+
 ## OpenCodex reauthorization
 
 Process one account at a time because the underlying ChatGPT OAuth flow is provider-global. The canonical driver always locks `~/.opencodex/oauth-flows/.opencodex-reauth.lock`, independent of the selected auth-file name. The runtime directory is mode `0700`; lock and auth files are mode `0600`; auth files are direct children of that directory and therefore outside the repository. Do not bypass the lock with direct API calls or a second UI flow. A stale lock is recovered only when its owner PID is dead and its age exceeds the 30-minute TTL; a live, recent, malformed, or unsafe-permission lock fails closed.
@@ -131,5 +137,6 @@ Account health is management-plane evidence, not end-to-end gateway acceptance. 
 1. Call `/v1/models` with Cloudflare Access headers plus `OPENCODEX_API_AUTH_TOKEN` and require HTTP 200.
 2. Call `/v1/responses` using a currently listed OpenAI model and require HTTP 200, a `response.completed` event, no `response.failed`/`response.incomplete`, and the expected output marker.
 3. For OpenCodex 2.11.0, send `input` as a Responses message list; the string shorthand returns HTTP 400 `Input must be a list`.
+4. The deployment requires `stream: true` on `/v1/responses`; `stream: false` returns HTTP 400 `Stream must be set to true`. Parse the SSE stream for `response.completed` and the output marker (proven 2026-08-12).
 
 Successful model listing alone does not prove generation or account-pool delivery.
