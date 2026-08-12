@@ -69,7 +69,7 @@ Use `node check_all_ban_status.mjs` for a read-only scan. It should:
 3. Submit raw account lines or tokens to `https://ban.nloop.cc/`.
 4. Parse the structured `/api/openai-ban/check` JSON response and use matched `results[].status`.
 
-Do **not** classify status by broad keyword search around an email. The ban.nloop page includes summary text such as `封禁 0 / 正常 1`, which caused a false positive for `ceciliajohnsonjgzwc@outlook.com`; the correct structured API status for that account was `normal`.
+Do **not** classify status by broad keyword search around an email. The ban.nloop page includes summary text such as `封禁 0 / 正常 1`, which caused a false positive for `<redacted-account>`; the correct structured API status for that account was `normal`.
 
 Known read-only scan output shape:
 
@@ -80,7 +80,7 @@ other@example.com\tok\tunknown
 BAN_SUMMARY_END
 ```
 
-`unknown` means this checker could not submit a parseable `tok_...` token to ban.nloop for that account, not that sub2api thinks the account is abnormal. Example: `halsey_isac272@outlook.com` was Active in sub2api and had a DB `refresh_token`, but its `notes` field was empty and ban.nloop only recognizes `tok_...` values, so the read-only ban checker correctly reported `unknown`.
+`unknown` means this checker could not submit a parseable `tok_...` token to ban.nloop for that account, not that sub2api thinks the account is abnormal. Example: `<redacted-account>` was Active in sub2api and had a DB `refresh_token`, but its `notes` field was empty and ban.nloop only recognizes `tok_...` values, so the read-only ban checker correctly reported `unknown`.
 
 ## GitHub/source control caveat
 

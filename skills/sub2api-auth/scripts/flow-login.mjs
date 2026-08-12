@@ -23,7 +23,10 @@ const EMAIL = ${JSON.stringify(EMAIL)};
 const PASS = ${JSON.stringify(PASS)};
 const AUTH_URL = ${JSON.stringify(AUTH_URL)};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const mask = (s) => String(s).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/g, (m) => m.slice(0, 2) + '***' + m.slice(m.indexOf('@')));
+const mask = (s) => String(s)
+  .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/g, (m) => m.slice(0, 2) + '***' + m.slice(m.indexOf('@')))
+  .replace(/https?:\\/\\/[^\\s"'<>]+/g, (value) => { try { const u = new URL(value); return u.origin + u.pathname + (u.search ? '?<redacted>' : '') + (u.hash ? '#<redacted>' : ''); } catch { return '<redacted-url>'; } });
+const safeUrl = (value) => { try { const u = new URL(String(value)); return u.origin + u.pathname; } catch { return ''; } };
 await useOrCreateTaskSpace(${JSON.stringify(Number(spaceId))});
 // fresh load (Hard Rule 23): never submit forms on a retry-restored page
 await openOrReuseTab(AUTH_URL, { wait: true });
@@ -45,7 +48,7 @@ for (let i = 0; i < 15; i++) {
 }
 if (!passReady) {
   const info = await pageInfo();
-  cliLog('NO_PASSWORD url=' + info.url + ' title=' + info.title);
+  cliLog('NO_PASSWORD url=' + safeUrl(info.url) + ' title=' + info.title);
   cliLog('SNAP: ' + mask(await snapshotText()).slice(0, 900));
 } else {
   await sleep(1000);
@@ -57,11 +60,11 @@ if (!passReady) {
     await sleep(1000);
     const info = await pageInfo();
     const u = info.url || '';
-    if (!u.includes('/log-in/password')) { cliLog('TRANSITION after ' + (i + 1) + 's url=' + u + ' title=' + info.title); break; }
+    if (!u.includes('/log-in/password')) { cliLog('TRANSITION after ' + (i + 1) + 's url=' + safeUrl(u) + ' title=' + info.title); break; }
     if (i === 24) cliLog('STILL_PASSWORD after 25s title=' + info.title);
   }
   const info = await pageInfo();
-  cliLog('final_url=' + info.url + ' title=' + info.title);
+  cliLog('final_url=' + safeUrl(info.url) + ' title=' + info.title);
   cliLog('SNAP: ' + mask(await snapshotText()).slice(0, 1600));
 }
 `;

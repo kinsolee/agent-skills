@@ -141,23 +141,19 @@ Trigger: after password submission via `requestSubmit`, the page displays `accou
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: current ego-browser E2E against `2fa.nloop.cc`; 2026-08-03 user correction during account #162 reauth confirmed MFA should be preferred over email OTP when OpenAI offers it; 2026-08-06 UPI iCloud batch (#174-#177) driven by `scripts/flow-mfa.mjs`, 4/4 codes accepted first try
-- `as_of`: `2026-08-06`
-- `scope_note`: one real account query produced exactly one TOTP result with a countdown and code button, and the submitted code transitioned OpenAI to consent (repeated for two more accounts on 2026-08-04, four more on 2026-08-05, and four more on 2026-08-06); zero/multiple-result behavior remains unverified; email-helper fallback is not preferred and observed unreliable for iCloud (see email OTP note). The page has TWO email inputs with the same `example@gmail.com` placeholder — the left 手动绑定 form and the right 粘贴邮箱 query panel; only the 粘贴邮箱 panel produces query results (2026-08-04 icloud batch: filling the wrong input caused a silent no-result polling loop; the correct panel returned exactly one result per account). When the observed countdown is below ~5 s, wait for the refreshed code before extraction — a code submitted with 1 s left was accepted only after the automatic refresh wait (2026-08-05 #173)
+- `source`: 2026-08-12 keyless JSON-API lookup live-verified for all four OpenCodex reauth targets (4/4 `found:true` with fresh 6-digit TOTPs; contract and response hash in `references/nloop-mfa-api.md`); earlier ego-browser E2E (2026-08-03 user correction during #162 reauth: MFA preferred over email OTP; 2026-08-06 UPI iCloud batch #174-#177, 4/4 codes accepted first try) remains valid for the OpenAI-side fill+submit
+- `as_of`: `2026-08-12`
+- `scope_note`: fetch the code through `GET <platform>/api/mfa/lookup?email=…` in-process — no platform tab and no UI anchors. The former browser-UI query path was removed after it returned 0 rows on 2026-08-12 for accounts whose API records exist. `found:false` means the platform has no record for that identity (fall back per the Error Recovery table); multiple `results` rows are ambiguous — stop rather than guess. When `remaining` is below 5 s, wait for the refreshed code before filling — a code submitted with 1 s left was accepted only after the automatic refresh wait (2026-08-05 #173). Email-helper fallback is not preferred and observed unreliable for iCloud (see email OTP note)
 - `prior_source`: artifact `codex-clipboard-85456eba-d2dd-486e-9c02-863d00ebc6c3.png`; source system `链动小铺 order-detail page`; order `LD26072731CVWM`
 - `prior_source_sha256`: `3aca992604ab571a012576ea7ce4816aa543109209ab8ce856e383a385fbe184`
 
-Verified trigger: the latest OpenAI snapshot shows the authenticator challenge, a code input such as `input[name="code"]`, or a verification-method choice that includes an authenticator/TOTP option. MFA is preferred over email OTP even when Base `mfa_platform_url` is empty; probe `2fa.nloop.cc` with the target email first.
+Verified trigger: the latest OpenAI snapshot shows the authenticator challenge, a code input such as `input[name="code"]`, or a verification-method choice that includes an authenticator/TOTP option. MFA is preferred over email OTP even when Base `mfa_platform_url` is empty; probe the `2fa.nloop.cc` lookup API with the target email first.
 
-1. Normalize the Base URL cell before browser use. When it is a Markdown link, prefer the parenthesized target; validate the expected HTTPS origin and do not print the URL.
-2. Open the configured MFA platform URL in a new tab within the same task space. If Base `mfa_platform_url` is empty, use `https://2fa.nloop.cc/`.
-3. `snapshotText()` — locate the query input in the `粘贴邮箱` panel. Anchor on the unique text `等待邮箱` (the first `粘贴邮箱` string occurrence in the snapshot is usually the descriptive 使用方式 copy "直接在右侧粘贴邮箱查看验证码", not the panel); the real query panel renders 粘贴邮箱 plus 等待邮箱 together, with the email textbox right after. Never use the identically-placeholdered 手动绑定 form input on the left. If absent, stop this pattern and re-observe.
-4. Fill the account email using a ref from the latest snapshot, wait 2–3 seconds, and take a fresh snapshot.
-5. Require the page to report exactly one result. Stop on zero or multiple results rather than guessing.
-6. Require one six-digit code button and an observed countdown. If the remaining time is below 5 seconds, wait for and verify a refreshed code before extraction.
-7. Extract the code silently, switch back to the existing OpenAI tab, take a fresh snapshot, fill the code using a current ref, and observe again.
-8. Click the current Continue/Verify/验证 ref, then require a transition away from the MFA challenge.
-9. When MFA succeeds and Base `mfa_platform_url` was empty, update the Base record with the observed MFA platform URL.
+1. Normalize the Base URL cell before use. When it is a Markdown link, prefer the parenthesized target; validate the expected HTTPS origin and do not print the URL.
+2. Query the platform lookup API in-process for the account email (`references/nloop-mfa-api.md`): require `ok:true`, `found:true`, and exactly one `results` row whose `code` matches `^\d{6,8}$`. If `remaining < 5`, wait for the next period and re-query once. The code never enters stdout, argv, or logs.
+3. Switch to the existing OpenAI `mfa-challenge` tab, take a fresh snapshot, fill `input[name="code"]` via the native setter (Hard Rule 14), and observe again.
+4. Submit via `form.requestSubmit` (Hard Rule 15), then require a transition away from the MFA challenge.
+5. When MFA succeeds and Base `mfa_platform_url` was empty, update the Base record with the observed MFA platform URL.
 
 ## OpenAI OAuth — Email OTP (email.nloop.cc fallback)
 
@@ -165,14 +161,16 @@ Evidence:
 - `evidence_status`: `snapshot_verified`
 - `source`: 2026-08-03 live observation during account #162 reauth against `email.nloop.cc`
 - `as_of`: `2026-08-03`
-- `scope_note`: the helper imported an iCloud mailbox using the bare email address (not `email----password`); two real fetch attempts returned no mail, no code, and no error, leaving the page at “点击获取邮件”. Do not prefer email OTP when MFA/TOTP is available; treat this path as a last-resort fallback and stop/hand off when fetches stay idle.
+- `scope_note`: the helper imported an iCloud mailbox using the bare email address (not `email----password`); two real fetch attempts returned no mail, no code, and no error, leaving the page at “点击获取邮件”. A later direct probe live-verified only the not-found branch. Existing script evidence covers `mails[].from` and `mails[].verificationCode` usage but not recipient or delivery-time field names; successful retrieval/submission remains unverified and fails closed until that contract is captured.
 
 Use only after MFA/TOTP is unavailable, returned no result, or failed observably.
 
-1. Open `https://email.nloop.cc/` in the same task space.
-2. For iCloud, fill only the target email address into the `邮箱内容` textarea and click `识别`. Do not use `email----password` unless the observed placeholder/flow explicitly requires it.
-3. Verify the mailbox appears in the iCloud group and is selected.
-4. Click `获取邮件` and observe for mail or a 6-digit code. If the page returns to “点击获取邮件” with no mail, code, or error after a bounded poll, stop and hand off; do not guess a code.
+1. Record the current challenge start in epoch milliseconds at the challenge issuance/navigation boundary and pass it as `--challenge-start-ms`. A timestamp recorded after delivery is not challenge evidence.
+2. Open `https://email.nloop.cc/` in the same task space.
+3. For iCloud, fill only the target email address into the `邮箱内容` textarea and click `识别`. Do not use `email----password` unless the observed placeholder/flow explicitly requires it.
+4. Verify the mailbox appears in the iCloud group and is selected.
+5. Accept mail only when the sender is strictly OpenAI/ChatGPT, any API-provided recipient exactly equals the target Base email, delivery time is later than this challenge start, newest-first ordering leaves exactly one eligible six-digit code, and every metadata field name comes from captured helper evidence.
+6. The current adapter lacks evidenced delivery-time metadata and therefore returns nonzero. If the page stays idle or metadata is insufficient, canonically cancel/hand off; never guess a field or code.
 
 ## OpenAI OAuth — Phone Binding
 
@@ -238,7 +236,7 @@ Page example, redacted: `https://sms369.vip/api/sms/access?token=xxx`
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: account #185 (ceciliabevacqua0@gmail.com + SIM 134***16, channel=direct, sub2api-auth #185 created 2026-08-07 20:21). Live SMS code observed at `elapsed=11s` after explicit OpenAI `重新发送短信` click + `cdp('Page.reload')` reload.
+- `source`: account #185 (`<redacted-account>` + SIM 134***16, channel=direct, sub2api-auth #185 created 2026-08-07 20:21). Live SMS code observed at `elapsed=11s` after explicit OpenAI `重新发送短信` click + `cdp('Page.reload')` reload.
 - `as_of`: `2026-08-07`
 - `scope_note`: the inbox page is server-rendered HTML with no client-side refresh; the only way to read the current inbox state is to re-issue the HTTP GET. Hard Rule 29 captures this: `snapshotText()` and `openOrReuseTab(url)` are NOT refreshes — use `cdp('Page.reload')` on the active tab each round. Hard Rule 30 captures the explicit `重新发送短信` click requirement on the OpenAI side. Poll cadence: ~3 s reload + ~1.5 s settle; hard-cap 90 s. The visible body alternates between `【OpenAI/ChatGPT】暂无短信，到期时间：YYYY-M-D HH:MM` (no SMS) and `【OpenAI/ChatGPT】验证码: NNNNNN, X 秒后过期` (SMS delivered). Codes are 6 ASCII digits surrounded by non-digits. No `刷新验证码`/`再次接收` button exists on the page; the refresh is purely the HTTP GET.
 - `redaction_note`: original URLs are token-bearing and remain process-local per Hard Rule 4 + Hard Rule 22.
@@ -367,7 +365,7 @@ When the page does not match any known pattern:
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: 2026-08-04 direct login of one real account (mar***@gmail.com) to verify subscription expiry; email form flow → native-setter password → requestSubmit → MFA → logged-in chatgpt.com
+- `source`: 2026-08-04 direct login of one real account (`<redacted-account>`) to verify subscription expiry; email form flow → native-setter password → requestSubmit → MFA → logged-in chatgpt.com
 - `as_of`: `2026-08-04`
 - `scope_note`: verified for subscription-state checks only (no OAuth callback); `GET /backend-api/me` returned empty email/phone and is unreliable; `GET/POST /backend-api/accounts/check*` returned 404/405; sidebar plan badge and Settings → 账单 tab are the authoritative reads
 
@@ -384,7 +382,7 @@ Use when an account is missing from sub2api (suspected manual removal) or its su
 
 Evidence:
 - `evidence_status`: `live_verified`
-- `source`: 2026-08-04 MFA resolution for mar***@gmail.com during direct login; slider passed via CDP drag; TOTP code from key input accepted by OpenAI mfa-challenge
+- `source`: 2026-08-04 MFA resolution for `<redacted-account>` during direct login; slider passed via CDP drag; TOTP code from key input accepted by OpenAI mfa-challenge
 - `as_of`: `2026-08-04`
 - `scope_note`: unlike 2fa.nloop.cc (email query), 2fa.run requires the TOTP secret; entry is guarded by a slide-to-verify challenge (`拖动滑块验证`); the page renders dark/blank in screenshots, so drive it via DOM rather than visuals
 

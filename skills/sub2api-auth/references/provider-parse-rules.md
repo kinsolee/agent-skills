@@ -69,7 +69,7 @@ Some providers ship one row per account with inline labels instead of a shared p
 
 Parsing rules for this variant:
 1. Split each `卡密内容` row on the repeated separator run (three or more `—` / `-` characters), then parse `label：value` segments. Keep every credential byte exactly as delivered; do not trim inside values.
-2. The email is the unlabeled leading segment; validate full email shape (plus-addressing such as `user+tag@gmail.com` is valid).
+2. The email is the unlabeled leading segment; validate full email shape (plus-addressing such as `account+tag@example.com` is valid).
 3. `密码：` supplies a per-row password (not shared). Require non-empty.
 4. `2fa密钥：` supplies a per-row TOTP seed; validate base32 charset (`A-Z2-7`, typically 32 chars) and write it to Base `mfa_secret`. This is a secret: mask in all output.
 5. The trailing HTTP(S) URL is the MFA platform URL; a following `备用：` URL is a backup platform. Store the primary in `mfa_platform_url`; keep backups in the account `notes`.

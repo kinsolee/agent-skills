@@ -1,64 +1,53 @@
-# sub2api OpenAI OAuth helper
+# Sub2API and OpenCodex OpenAI OAuth helper
 
-This helper automates the safe outer loop for adding OpenAI OAuth accounts to a sub2api admin page.
+This skill manages OpenAI OAuth accounts for Sub2API and OpenCodex. It uses management APIs for account operations, ego-browser for the OpenAI login flow, and Feishu Base as the credential source of truth.
+
+## Compatibility
+
+The account-management workflow currently supports only Sub2API and OpenCodex. Configure each deployment through gitignored local environment files; keep real hostnames, LAN addresses, account identities, and credentials out of committed documentation.
 
 It will:
 
-- open the sub2api accounts page
-- click add account
-- fill account name, remark, platform, account type, proxy, and group
-- generate the authorization link
-- open the authorization link in a browser tab
-- wait while you complete the OpenAI login/consent flow manually
-- listen on the `localhost` callback port advertised in the generated auth link, or fall back to watching the browser URL
-- paste that callback URL back into sub2api
-- verify whether the account appears as normal in the accounts list
-
-It intentionally does not automate OpenAI password entry, email-code retrieval, or verification-code handling.
+- inspect Sub2API and OpenCodex account health through their management APIs
+- try silent refresh before interactive Sub2API reauthorization
+- drive isolated OpenAI email, password, MFA, optional phone, and consent steps
+- submit callbacks without exposing the callback URL in argv or stdout
+- verify persisted credentials and run a real post-authorization data-plane check
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js 18 or newer
+- ego-browser (ego-lite)
+- authenticated `lark-cli` access to the `sub2api-auth` Base
+- gitignored local environment files for the selected platform
 
 ## Setup
 
 ```bash
 npm install
-npx playwright install chromium
 cp .env.example .env
-cp accounts.example.txt accounts.txt
 ```
 
-### Dependencies
+Read [SKILL.md](SKILL.md) before running a live account flow. It contains the source-specific safety rules, exact verification gates, and the canonical script inventory.
 
-| Package | Purpose |
-|---------|---------|
-| `playwright` | Automates the sub2api admin page (Chromium) |
-| `@askjo/camofox-browser` | Stealth Firefox REST API for OpenAI auth (bypasses Cloudflare) |
+## Common probes
 
-The camofox-browser server starts automatically on port 9377 when the script runs. No manual setup needed — it's installed via `npm install`.
-
-Edit `.env` if your sub2api URL or group name is different. Put one account per line in `accounts.txt`:
-
-```text
-email@example.com ---- any remark content you want copied into sub2api
-```
-
-The email is parsed from the beginning of each line. The full line is copied into the sub2api remark field.
-
-## Run
+Sub2API monitoring:
 
 ```bash
-npm run auth -- --accounts accounts.txt
+node ../../src/sub2api-reauth-runner.mjs --monitor-only
 ```
 
-Useful options:
+OpenCodex provider inventory:
 
 ```bash
-npm run auth -- --accounts accounts.txt --admin-url "$SUB2API_ADMIN_URL"
-npm run auth -- --one email@example.com
-npm run auth -- --headless
-npm run auth -- --accounts accounts.txt --keep-open-on-fail
+node scripts/opencodex-providers.mjs
 ```
 
-During each account, finish the OpenAI login and consent in the browser tab. If the flow lands on a `http://localhost...` callback URL, the helper will catch it automatically and continue.
+OpenCodex account patrol:
+
+```bash
+node scripts/opencodex-account.mjs check --refresh
+```
+
+Do not infer deactivation from a failed refresh. Only the explicit OpenAI `account_deactivated` page is terminal. Follow the full skill workflow for reauthorization, cleanup, and readback.

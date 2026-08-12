@@ -1,35 +1,20 @@
 ---
 name: sub2api-auth
-description: Use when adding OpenAI OAuth accounts to sub2api, re-authorizing revoked accounts, parsing provider delivery docs, or managing SIM card pool for phone verification
-triggers:
-  - sub2api
-  - oauth授权
-  - openai授权
-  - 重新授权
-  - revoked
-  - 批量添加账号
-  - 账号授权
-  - token revoked
-  - 401
-  - 添加gpt账号
-  - 接码
-  - 手机号绑定
-  - MFA验证码
-  - provider文档
-  - 卡密
-tags:
-  - sub2api
-  - openai
-  - oauth
-  - automation
-  - auth
-  - ego-browser
-  - feishu-base
+description: Manage OpenAI OAuth accounts, re-authorization, provider deliveries, and SIM verification for Sub2API and OpenCodex. Use for Sub2API auth/revoked/401/account batches, MFA or phone binding, provider documents, or Cloudflare Access-protected OpenCodex management and account-pool queries.
 ---
 
 # sub2api OpenAI OAuth — Agent Playbook
 
 Agent-driven automation for the full lifecycle of OpenAI OAuth accounts in sub2api. Uses ego-browser for all browser operations, Feishu Base for persistence, and visual models for page understanding.
+
+## Supported Platforms
+
+Support only these account-management platforms:
+
+- Sub2API
+- OpenCodex
+
+Treat any other management platform as unsupported until its real API contract and an end-to-end flow are verified and documented. Keep deployment hostnames, LAN addresses, account identities, and credentials in gitignored local configuration; use platform names, route paths, environment variables, or placeholders in version-controlled documentation.
 
 ## Prerequisites
 
@@ -48,6 +33,12 @@ Resolve at runtime via lark-cli (no .env tokens needed):
 4. The sub2api instance address is configuration, not code — there is NO hardcoded default. `SUB2API_ADMIN_BASE` (instance origin) or the legacy `SUB2API_ADMIN_URL` (panel URL; any `/admin/accounts` tail is stripped) must be set in `.env` (gitignored) or the process environment; `src/sub2api-admin-api.mjs` fails fast with a clear error when unset.
 5. `SUB2API_ADMIN_API_KEY` (admin REST API key, `x-api-key` header) lives in the same `.env`. The automation calls the admin API directly through `src/sub2api-admin-api.mjs`; no browser login to the admin panel is needed. Never print the key or the instance URL values. See `references/sub2api-admin-api.md` and `.env.example` for the key inventory.
 
+## OpenCodex Management API
+
+For any configured OpenCodex deployment, read [references/opencodex-management-api.md](references/opencodex-management-api.md) before calling an `/api/*` management route. Send both Cloudflare Access service-token headers and the distinct OpenCodex management token. Keep the Codex data-plane token separate even though both OpenCodex layers accept a header named `x-opencodex-api-key`.
+
+Use `node skills/sub2api-auth/scripts/opencodex-providers.mjs` for the canonical read-only `GET /api/providers` probe. Use `node skills/sub2api-auth/scripts/opencodex-account.mjs check --refresh` for the OpenAI/ChatGPT account-pool patrol; reauthorize only rows it classifies as `needsReauth` or `reauth_required`. Both derive the public management origin from the active Codex provider config, load credentials without printing them, reject Access redirects, and emit only allowlisted metadata.
+
 ## Reusable Scripts — check `scripts/` before writing anything
 
 `skills/sub2api-auth/scripts/` holds live-verified browser drivers. ALWAYS reuse or extend these; never rewrite one from scratch because a temp copy was deleted (2026-08-06 lesson: rewriting cost a full session). All follow the same contract: read secrets from Base in-process by `record_id`, embed them via `JSON.stringify` into the piped ego-browser script (Hard Rule 22), and mask every secret in output. The table below is the canonical inventory — anything an automated run (heartbeat, launchd, or manual) needs to do in the browser MUST map to a row here; new capability is added by extending a script and adding a row, not by emitting a throwaway temp script (Hard Rule 32).
@@ -55,14 +46,17 @@ Resolve at runtime via lark-cli (no .env tokens needed):
 | Script | Usage | Does |
 |--------|-------|------|
 | `flow-login.mjs` | `<gpt_record_id> <space_id> <auth_file.json>` | Fresh auth-URL load → email → password (native setter + `requestSubmit`, Hard Rules 14/15/23) → polls the transition. Live-verified 2026-08-05/06. |
-| `flow-mfa.mjs` | `<gpt_record_id> <space_id> [platform_url]` | `2fa.nloop.cc` email-keyed query (等待邮箱 anchor, not the first 粘贴邮箱), auto-refreshes the code when countdown <5s, fills+submits on the `mfa-challenge` tab. Live-verified 2026-08-04/05/06. |
+| `flow-mfa.mjs` | `<gpt_record_id> <space_id> [platform_url]` | Email-keyed TOTP via the platform's keyless JSON API (`GET <platform>/api/mfa/lookup`, contract in `references/nloop-mfa-api.md`): in-process lookup by Base email, waits for a fresh code when `remaining<5s`, then fills+submits on the `mfa-challenge` tab. API lookup live-verified 2026-08-12 (4/4 OpenCodex targets found with fresh codes); the former browser-UI query path was removed after it returned 0 rows for accounts that had live API records. |
+| `flow-email-otp.mjs` | `<gpt_record_id> <space_id> --challenge-start-ms <epoch-ms>` | Last-resort iCloud email OTP fallback after MFA/TOTP is observably unavailable. Binds selection to strict sender, optional exact recipient metadata, post-challenge delivery time, newest-first ordering, and one unique six-digit code. The existing helper contract has no evidenced recipient/time field names, so its adapter fails closed. The not-found branch is live-verified; successful retrieval/submission is not. |
 | `flow-consent.mjs` | `<record_id> <space_id> --mode create --session-id <sid>` or `--mode apply --id <acct> --session-id <sid>` | Identity gate (consent email must equal Base email) → consent click → callback capture from current URL or CDP `Page.getNavigationHistory` → admin-API `create`/`apply` (create uses fleet canonical proxy_id=1, group_ids=[2], concurrency=10, priority=1). Prints a masked account summary. Live-verified 2026-08-06 ×4. |
 | `flow-jihuo-mfa.mjs` | `<gpt_record_id> <space_id>` | `2fa.jihuo.plus` fragment-keyed TOTP driver — the URL hash IS the per-account seed; the page renders the 6-digit code into `#codeDisplay` and a countdown into `#timeRemaining`. Validates the fragment is present (Hard Rule 12), auto-refreshes under 6 s, fills+submits on the `mfa-challenge` tab. The TOTP seed (location.hash) must NEVER appear in cliLog or stdout (Hard Rule 4). Live-verified 2026-08-06/07. |
 | `flow-totp-local.mjs` | `<gpt_record_id> <space_id>` | Secret-keyed TOTP fallback (Hard Rule 17 secret-keyed shape): reads Base `mfa_secret`, computes RFC 6238 TOTP (HMAC-SHA1, 30 s window, 6 digits) over the Base32-decoded seed locally, fills+submits on the `mfa-challenge` tab. Use when an MFA platform page fails/unreachable and the account has `mfa_secret`, or for any `2fa.run`-style secret-paste platform. Sanity-checked against the RFC 6238 SHA1 test vector. Never print `mfa_secret` (Hard Rule 4). Added 2026-08-07. |
 | `flow-add-phone.mjs` | `<gpt_record_id> <sim_record_id> <space_id>` | SIM phone binding on the OpenAI `add-phone` → `phone-verification` flow (US `+1` direct-channel numbers). Implements Hard Rules 29/30/31 end to end: `cdp('Page.reload')` inbox polling (not `snapshotText()`), explicit `重新发送短信` click with re-click at ~round 6/14, 90 s hard cap, leading-`1` strip for 11-digit numbers. Writes SIM bookkeeping and `bound_phone` per Hard Rule 21. Live-verified 2026-08-07 on #185. |
 | `repair-mapping.mjs` | `<account_id> [ref_id,ref_id,...]` (refs default `158,113,124,170`) | Full-metadata credentials PUT with the canonical ≥20-entry `model_mapping` (Hard Rule 19 compliant), readback verification with token-lag retry (Hard Rule 26), SSE `/test` with EOF retry. Idempotent: re-run safely after a partial pass. Live-verified 2026-08-06 ×4. |
+| `opencodex-account.mjs` | `check --refresh` or `start/status/submit/cancel` with `--auth-file` | Canonical OpenCodex account-pool patrol and OAuth management driver. Uses one protected runtime lock across sessions, validates callback stdin, and emits redacted outcomes. Live-verified scope is inventory/patrol, start/login, explicit `account_deactivated`, and second-factor failure branches only. Callback submission, credential persistence, and fresh-health success after reauth are not live-verified. |
+| `flow-opencodex-consent.mjs` | `<gpt_record_id> <space_id> <auth_file.json>` | OpenCodex-specific consent identity gate, post-gate loopback callback recovery, strict in-process validation, and stdin submission. Any consent, callback, or submit failure invokes canonical cancel. Callback submit/persistence is not live-verified; separately verified data-plane traffic is not account-reauth success evidence. |
 
-`<auth_file.json>` is the `--raw` output of `generate-auth-url` (`{"authUrl","sessionId"}`): write it with `chmod 600`, keep the `sessionId` for the consent step, and sanitize it afterwards by overwriting with `node` (`rm` is blocked in the sandbox). New accounts need `repair-mapping.mjs` right after `create` (the create path carries no mapping); reauth needs the mapping check after every `apply` (Flow C step 2).
+For Sub2API, `<auth_file.json>` is the `--raw` output of `generate-auth-url` (`{"authUrl","sessionId"}`); keep its `sessionId` for `flow-consent.mjs`. For OpenCodex, `opencodex-account.mjs start` writes `{"accountId","flowId","authUrl","oauthStateHash"}` for the OpenCodex drivers. OpenCodex auth files must be direct children of `~/.opencodex/oauth-flows/`, outside the repository, at mode `0600`; that directory and its single `.opencodex-reauth.lock` are `0700` and `0600`. Stale recovery requires a dead owner PID and an expired 30-minute TTL. If no state can be derived from the protected auth URL, local state binding is unavailable and the pending server flow remains the validation authority. New Sub2API accounts need `repair-mapping.mjs` right after `create`; reauth needs the mapping check after every `apply`.
 
 ## Scheduled Reauth Automation
 
@@ -75,13 +69,6 @@ Primary scheduler (since 2026-08-06): a **Codex hourly heartbeat automation** (`
 The patrol is fully unattended: CAPTCHA/slider/handoff situations must be resolved automatically per the Error Recovery table or the affected account is marked `manual_required` in Base and skipped — there is no interactive user to hand off to. Records: per-run JSON lines in `state/reauth-history.jsonl`, runner detail in `state/reauth-runner.log`, and the visible hourly report in the Codex task.
 
 Fallback/legacy: the launchd job `com.kinso.sub2api-reauth` (runs the same runner in `full` mode, which spawns a headless `codex exec` agent when the queue is non-empty) is **disabled** (`launchctl bootout`, 2026-08-06) because its headless runs left no user-visible record; its plist remains at `~/Library/LaunchAgents/com.kinso.sub2api-reauth.plist` and can be reloaded if the Codex app will be closed for extended periods (Codex automations only fire while the app is running). Never enable both schedulers at once.
-
-## When to Use
-
-- User provides provider delivery screenshots or text (GPT account packs, SIM card packs)
-- User wants to add/authorize OpenAI OAuth accounts to sub2api
-- User mentions revoked, 401, or error accounts need re-authorization
-- User says keywords: "sub2api", "oauth授权", "添加账号", "重新授权", "接码", "MFA"
 
 ## Hard Rules
 
@@ -102,7 +89,7 @@ Fallback/legacy: the launchd job `com.kinso.sub2api-reauth` (runs the same runne
 15. **OpenAI form submission via requestSubmit**: The OpenAI auth password form uses React Router. Clicking the submit button with ego-browser's `click()` may trigger a native form POST that is intercepted by OpenAI's sentinel bot-detection iframe and times out. Instead, call `form.requestSubmit(buttonElement)` via `js()` to trigger React Router's fetch-based submission path, which passes through the browser's existing Cloudflare session. The password verification endpoint is `/api/accounts/password/verify` (POST, JSON body `{"password":"..."}`) — do not use `/api/accounts/authorize/continue` for the password step.
 16. **OAuth identity is a hard gate**: ego-browser task space isolation does not guarantee a fresh OpenAI login state; a new space can inherit an account chooser or authenticated session for a previous account. Before consent, require the provider-visible email to exactly match the target Base record. On an account chooser, select `Log in to another account` / `登录至另一个帐户` unless the displayed account exactly matches the target. Never infer identity from the sub2api account name, callback success, or `正常` status. Before marking Base active, require the Sub2API backend credential identity to match the target Base email, `has_access_token=true`, `has_refresh_token=true`, current credential metadata, `status=active`, `schedulable=true`, empty error, and an SSE model test ending in `test_complete success=true`.
 17. **MFA-first verification**: When OpenAI requires second-factor verification and an authenticator/MFA/TOTP path is offered, always attempt MFA before email OTP. An account's MFA availability is determined by the OpenAI challenge page, not only by Base `mfa_platform_url`; when the field is empty, probe the known MFA platform (`2fa.nloop.cc`) with the target email before choosing email OTP. After a successful MFA-first result, update the Base record's `mfa_platform_url` if it was previously empty. Three MFA platform shapes exist:
-    - **Email-keyed** (e.g. `2fa.nloop.cc`): paste the account email, the page returns the TOTP. Drive with `scripts/flow-mfa.mjs <record_id> <space_id> [platform_url]`.
+    - **Email-keyed** (e.g. `2fa.nloop.cc`): query the platform's keyless JSON API by account email (`references/nloop-mfa-api.md`) — no platform page needed. Drive with `scripts/flow-mfa.mjs <record_id> <space_id> [platform_url]`.
     - **Secret-keyed** (e.g. `2fa.run`): paste the Base `mfa_secret` TOTP seed into the platform page. Drive by reading `mfa_secret` from Base and pasting it into the platform, or compute locally (RFC 6238, base32 HMAC-SHA1, 30 s window) when the platform page fails.
     - **Fragment-keyed** (e.g. `2fa.jihuo.plus`): the URL fragment itself is the per-account TOTP seed — no email/secret input is needed, the page reads the hash on load. The fragment is easily lost when Base cells are round-tripped through Markdown links, so the driver MUST validate its presence and length before launching the browser. Drive with `scripts/flow-jihuo-mfa.mjs <record_id> <space_id>`.
    Pick the shape by the platform host and observed input, never by URL alone; when a platform page fails and the account has `mfa_secret`, computing TOTP locally from the seed is an acceptable fallback.
@@ -116,10 +103,10 @@ Fallback/legacy: the launchd job `com.kinso.sub2api-reauth` (runs the same runne
 25. **Code-sent detection needs URL + input, not page text**: The string `一次性验证码` appears in the add-phone page's own descriptive copy (`我们会向该号码发送一次性验证码进行验证`), so matching it false-positives before any SMS is sent. Require `pageInfo().url` containing `/phone-verification` AND `input[name="code"]` present in the DOM before treating the phone step as code-sent (observed false positive 2026-08-06).
 26. **Token readback lag after credentials PUT**: A GET immediately after `PUT /api/v1/admin/accounts/<id>` can transiently report missing access/refresh tokens even when the PUT body carried the complete credentials including tokens (observed twice on 2026-08-06, #176/#177; lag exceeded 6 s). Retry the readback (`repair-mapping.mjs` polls up to 5×3 s) before declaring a Hard Rule 19 wipe; the SSE `/test` ending `test_complete success=true` is the decisive health proof. Do not re-apply credentials solely because of a transient empty-token readback.
 27. **MFA driver selection is by URL host, not by field name**: When the heartbeat or the orchestrator reaches the MFA step, choose the driver by parsing the host of `Base.mfa_platform_url` (the `https?://(host)/...` part):
-    - `2fa.nloop.cc` (or any email-keyed domain with a 等待邮箱 panel) → `scripts/flow-mfa.mjs`. Passing the wrong driver produces `NO_CODE` because the platform doesn't recognize an empty query.
+    - `2fa.nloop.cc` (or any email-keyed domain serving `/api/mfa/lookup`) → `scripts/flow-mfa.mjs`. Its API lookup returns `found:false` when the platform has no record for that email; that is the signal to fall back per the Error Recovery table.
     - `2fa.jihuo.plus` (or any fragment-keyed domain) → `scripts/flow-jihuo-mfa.mjs`. Passing `flow-mfa.mjs` instead would email-query a domain that doesn't have an inbox and produce `NO_CODE`.
     - All other hosts are an unsupported shape → mark the account `manual_required`, append a redacted diagnostic to `notes`, and skip per the Error Recovery table.
-   Proven 2026-08-07 (#178/#181/#182/#180 in one heartbeat): a batch that looked like 2fa.nloop.cc accounts actually used 2fa.jihuo.plus (fragment-keyed); the first nloop.cc probe returned `NO_CODE` for every account and would have stalled the patrol indefinitely.
+   Proven 2026-08-07 (#178/#181/#182/#180 in one heartbeat): a batch that looked like 2fa.nloop.cc accounts actually used 2fa.jihuo.plus (fragment-keyed); the first nloop.cc probe found no record for any account and would have stalled the patrol indefinitely.
 28. **Silent refresh 502 with EOF must distinguish transient EOF from refresh_token_invalidated**: `sub2api-monitor.mjs` currently treats every silent-refresh failure (502 EOF on `auth.openai.com/oauth/token`) as a queue-worthy error, but the underlying cause is often `refresh_token_invalidated` (401 `invalid_request_error`, "Your session has ended") wrapped in a 502 — proven 2026-08-07 on #180: monitor queued for Flow C, but a manual `refresh` immediately revealed a 401 invalid_grant that no retry could fix. Refine the classifier:
     - If the response body contains `refresh_token_invalidated` or `Your session has ended` → hard fail: queue for interactive Flow C (current behaviour, correct).
     - If the response is a bare EOF / network error and there have been <2 prior refresh attempts within the same monitor run → retry once with a 3–5 s pause, then re-classify.
@@ -143,7 +130,7 @@ Fallback/legacy: the launchd job `com.kinso.sub2api-reauth` (runs the same runne
 32. **Reuse-first / adapt-don't-fork / persist-after-adapt (the automation contract)**: Every automated run (heartbeat, launchd, or manual loop) MUST exhaust the Reusable Scripts table above before doing any browser work — the scripts in `skills/sub2api-auth/scripts/` are the only sanctioned browser drivers. Do NOT generate a throwaway temp script (heredoc, `mktemp`, an untracked `.mjs`) that duplicates a reusable script's responsibility; that is how live-verified logic gets silently lost or forked. The only time the model writes code during a run is to handle a **genuinely new** error, page, or edge case that no reusable script and no Error Recovery / Hard Rule row already covers — and even then the fix is made by **editing the reusable script itself** (generalizing it, with a dated inline comment naming the new trigger), NOT by forking a temp copy. Every such adaptation closes the loop in the same run: (a) extend the script; (b) add a row to the Reusable Scripts table if new, and record the new error in `Error Recovery` or as a new Hard Rule with a date + evidence; (c) commit + push the skill change via the heartbeat's skill-sync step before reporting the run done. An adapted script that stays in an untracked temp file at end-of-run is a failed run. Tempting as it is, do not "just fix it inline this once" — if the case is real it belongs in the script; if it is a one-off (e.g. a malformed paste), handle it without writing code.
 
 ## Flow A: Provider Document Parsing
-32. **Base record lookup for queued accounts uses `credentials.email`, never `name`**: When matching a sub2api account to its Feishu Base record, always use the `credentials.email` field from `admin get --id <N> --raw` — never the sub2api `name` field. Auto-generated accounts (e.g. `jollies_detail_54`, `builder_albums_3x+berbukwar@icloud.com`) have an arbitrary sub2api display name that does not match the Base `email` column; the OAuth credentials `email` field is the canonical identifier. If `credentials.email` matches no Base record either, mark the account `manual_required` with a diagnostic that includes both `name` and `credentials.email` (proven 2026-08-10: accounts #161 and #159 stayed in error for >1 day because the heartbeat used `name` for Base lookup and missed the match; the `credentials.email` field resolved them immediately).
+32. **Base record lookup for queued accounts uses `credentials.email`, never `name`**: When matching a sub2api account to its Feishu Base record, always use the `credentials.email` field from `admin get --id <N> --raw` — never the sub2api `name` field. Auto-generated accounts may have an arbitrary sub2api display name that does not match the Base `email` column; the OAuth credentials `email` field is the canonical identifier. If `credentials.email` matches no Base record either, mark the account `manual_required` with a redacted diagnostic (proven 2026-08-10: display-name lookup missed real matches; `credentials.email` resolved them immediately).
 
 Triggered when user provides screenshots or text of provider delivery pages.
 
@@ -218,8 +205,7 @@ Panel UI fallback only if the API is unreachable (Hard Rule 20): follow `referen
    After password submission, `snapshotText()` to determine what OpenAI requires:
 
    - **MFA / authenticator code page** (code input visible, or OpenAI offers both authenticator and email methods):
-     Prefer `scripts/flow-mfa.mjs <record_id> <space_id> [platform_url]` for email-keyed platforms (Reusable Scripts). Otherwise prefer MFA over email OTP whenever an authenticator/MFA challenge is available (see Hard Rule 17). If the account has `mfa_platform_url`, use it. If `mfa_platform_url` is empty but OpenAI shows an authenticator/TOTP option, open `https://2fa.nloop.cc/` and query the target Base email before choosing email OTP. Follow `references/known-ui-patterns.md` → "OpenAI OAuth — MFA Verification". Only fall back to email OTP when the MFA platform reports no result, multiple ambiguous results, or is unreachable.
-     On `2fa.nloop.cc`, target the right-side 粘贴邮箱 query panel — the panel whose container renders 粘贴邮箱 plus 等待邮箱/可查询. The left-side 手动绑定 form has an identical-looking `example@gmail.com` email input; filling it silently produces no query results (observed 2026-08-04 during the icloud batch).
+     Prefer `scripts/flow-mfa.mjs <record_id> <space_id> [platform_url]` for email-keyed platforms (Reusable Scripts). Otherwise prefer MFA over email OTP whenever an authenticator/MFA challenge is available (see Hard Rule 17). If the account has `mfa_platform_url`, use it. If `mfa_platform_url` is empty but OpenAI shows an authenticator/TOTP option, run the `2fa.nloop.cc` lookup API for the target Base email before choosing email OTP. Follow `references/known-ui-patterns.md` → "OpenAI OAuth — MFA Verification" and `references/nloop-mfa-api.md`. Only fall back to email OTP when the MFA platform reports no result, multiple ambiguous results, or is unreachable.
      When the account has a non-empty `mfa_secret`, the platform is secret-keyed: open `mfa_platform_url` (default `https://2fa.run/`, backups from the account notes), paste the `mfa_secret` seed, and read the current 6-digit TOTP code (follow `references/known-ui-patterns.md` → "MFA Platform — 2fa.run (TOTP Secret Input)"). If the platform page fails, compute TOTP locally from `mfa_secret` instead of falling back to email OTP.
 
    - **Email verification page** (fallback when MFA unavailable):
@@ -406,7 +392,7 @@ Triggered automatically after a SIM card order is written and read back in Flow 
 | reCAPTCHA / hCaptcha checkbox | Auto-click via snapshotText or screenshot; if escalated to image challenge, use visual model to identify targets and click them; two independent visual reads must agree; max 2 rounds, then handoff |
 | reCAPTCHA v3 / invisible | Score-based; real Chromium usually passes; no extra action |
 | MFA platform unreachable | Fallback to email helper; if both fail, mark manual_required |
-| `2fa.nloop.cc` query returns 0 results for the account email AND Base `mfa_secret` field is empty | Before falling back to email OTP, scan the Base `notes` field for a `mfa_secret=XXXX` text entry. Older manual-add accounts stored the TOTP seed inside notes, not in the dedicated field. Extract the seed, sync it to the `mfa_secret` field via `+record-upsert`, then run `flow-totp-local.mjs` to compute RFC 6238 TOTP locally. Proven 2026-08-11 on #162: three wasted hourly attempts and a park were caused by this gap; after notes-to-field sync the local TOTP succeeded on the first try. |
+| `2fa.nloop.cc` lookup API returns `found:false` for the account email AND Base `mfa_secret` field is empty | Before falling back to email OTP, scan the Base `notes` field for a `mfa_secret=XXXX` text entry. Older manual-add accounts stored the TOTP seed inside notes, not in the dedicated field. Extract the seed, sync it to the `mfa_secret` field via `+record-upsert`, then run `flow-totp-local.mjs` to compute RFC 6238 TOTP locally. Proven 2026-08-11 on #162: three wasted hourly attempts and a park were caused by this gap; after notes-to-field sync the local TOTP succeeded on the first try. |
 | MFA visual-only page | Screenshot → visual model reads 6-digit code; two reads must agree |
 | SMS platform unreachable | Mark SIM unavailable, try next number |
 | OpenAI never delivers SMS within 90 s window even after `重新发送短信` click + `cdp('Page.reload')` polling (static SMS inbox like `sms688.cc`) | OpenAI per-IP risk control (Hard Rule 30). Set affected SIMs `status=cooldown`, `cooldown_until=now+1 hour`; do NOT increment `bind_count`/`last_bind_time`/`bound_accounts`. If 1 verified number is exhausted and only `cooldown` cards remain, the account transitions to `waiting_sim` and the same card becomes a valid candidate after the cooldown expires (do not exhaust fresh SIMs on the same IP window) |
@@ -428,7 +414,8 @@ Triggered automatically after a SIM card order is written and read back in Flow 
 | `account_deactivated` on OpenAI page | Mark Base `failed` with deactivation notes; delete from sub2api admin; read back both; continue next account. Terminal — do not retry or mark `manual_required` |
 | OpenAI sentinel timeout on password form | The sentinel bot-detection iframe blocks native form POST. Use `form.requestSubmit(btn)` via `js()` instead of ego-browser `click()` on the submit button (see Hard Rule 15). If still timing out after 3 rounds, handoff |
 | Fresh OAuth URL opens directly on consent after the same isolated task space completed MFA | Reuse `flow-login.mjs` to load the new URL; it reports `CONSENT_READY` without submitting. Then run `flow-consent.mjs` with the new session ID so its identity gate captures the matching callback. Added 2026-08-10 after reauth #158. |
-| `2fa.nloop.cc` query panel lacks the historic `等待邮箱` anchor or exposes its textbox with an unstable snapshot ref | The current UI may label the same right-side query panel `可查询`; `flow-mfa.mjs` accepts either anchor, polls briefly, then safely targets the input scoped to `粘贴邮箱` by DOM only if no stable ref appears. Added 2026-08-10 from live page observation during reauth #158/#162. |
+| `2fa.nloop.cc` lookup API returns non-200 or `api_not_ok` | Treat the platform as unreachable for this round: do not guess a code. Retry once after a few seconds; on a second failure fall back per Hard Rule 17 (notes-embedded seed → `flow-totp-local.mjs`, else email OTP when OpenAI offers it). The keyless API contract and error codes are in `references/nloop-mfa-api.md`. Added 2026-08-12 when `flow-mfa.mjs` moved from the browser-UI query to the JSON API. |
+| OpenAI email challenge returns HTTP 200 but `email.nloop.cc/api/icloud/query` returns not-found, or the helper response lacks evidenced delivery-time metadata | Treat the send side as healthy and the receive channel as unavailable. Do not guess helper fields or an OTP. Canonically cancel the pending OpenCodex flow, verify the auth file is zero bytes and the fixed lock is released, keep the account as `reauth_required`, and retry only with an exact-identity receive channel that supplies sufficient metadata. The receive-failure branch is live-verified; successful OTP retrieval/submission is not. |
 | `fillInput` doubles password value | ego-browser `fillInput` may append instead of replace on OpenAI password inputs. Use native setter via `js()` and verify `input.value.length` matches expected before submitting (see Hard Rule 14) |
 | Partial credentials PUT wiped account metadata | Admin PUT replaces non-token credential fields (Hard Rule 19). Immediately re-PUT the FULL credential metadata (email, plan_type, client_id, expires_at, model_mapping, and every other recoverable non-empty field); access/refresh/id tokens survive. Fields with no local recovery source (`chatgpt_account_id`, `chatgpt_user_id`, `organization_id`, `subscription_expires_at`) stay empty until a later reauth or upstream probe re-populates them — disclose the gap, never invent values |
 | OpenAI "Operation timed out" error page | Sentinel/hydration issue on auth.openai.com (Hard Rule 23): click 重试 at most once; if a form step times out again, reopen the authorization URL fresh and redo the flow — the 重试-restored page is half-hydrated and its submissions time out by design. Do NOT fall back to a standalone fetch of `/api/accounts/authorize/continue` (forks login-flow state, proven 2026-08-03). Fresh-load attempts normally succeed immediately (4/4 on 2026-08-05) |

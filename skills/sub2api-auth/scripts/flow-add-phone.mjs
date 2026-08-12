@@ -6,7 +6,7 @@
 //       in case the first SMS push was suppressed by per-IP risk control. Hard-cap at 90 s.
 //   31. Strip leading `1` from 11-digit "1xxxxxxxxxx" phone numbers to get the 10-digit
 //       US national part; OpenAI's country dropdown does NOT include 中国.
-// Live-verified 2026-08-07 on account #185 (ceciliabevacqua0@gmail.com, SIM 134***16):
+// Live-verified 2026-08-07 on account #185 (<redacted-account>, SIM 134***16):
 // SMS code round=4 elapsed=11 s after 重新发送短信 + Page.reload.
 // Usage: node flow-add-phone.mjs <gpt_record_id> <sim_record_id> <space_id>
 import { execFileSync, spawnSync } from "node:child_process";
