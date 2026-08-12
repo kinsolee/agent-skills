@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
-// OpenCodex consent identity gate and callback capture. The callback is validated
-// in the canonical child process, never forwarded through argv or emitted.
-// Every consent/callback failure invokes the canonical account-driver cancel.
+// OpenCodex consent identity gate, loopback callback capture, and canonical submit.
+// 2026-08-12: submit moved from the ego-browser embedded runtime to this parent
+// process — the embedded runtime's process.execPath is not a usable Node binary,
+// so the in-browser submit child failed silently (first live attempt, account bdca).
+// The callback now travels browser→parent via cliLog and enters the canonical
+// driver through stdin only; it never reaches argv or emitted output.
+// Every consent/callback/submit failure invokes the canonical account-driver cancel.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
@@ -52,10 +56,12 @@ if (!email) {
   failClosed("missing_target_identity", 3);
 }
 
+const mask = (value) => String(value)
+  .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, (x) => x.slice(0, 2) + '***' + x.slice(x.indexOf('@')))
+  .replace(/https?:\/\/[^\s"'<>]+/g, (v) => { try { const u = new URL(v); return u.origin + u.pathname; } catch { return '<redacted-url>'; } });
+
 const script = `
 const EMAIL = ${JSON.stringify(email)};
-const ACCOUNT_CLI = ${JSON.stringify(CLI)};
-const AUTH_FILE = ${JSON.stringify(authFile)};
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const isCandidateCallback = (value) => {
   try {
@@ -79,7 +85,7 @@ try {
 }
 if (baselineReady) {
   const bodyText = await js(String.raw\`document.body.innerText || ''\`);
-  const emails = [...new Set(String(bodyText).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/g) || [])];
+  const emails = [...new Set(String(bodyText).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])];
   if (!emails.includes(EMAIL)) {
     cliLog('OPENCODEX_CONSENT_OUTCOME=identity_mismatch');
   } else {
@@ -125,15 +131,9 @@ if (!callback) {
     cliLog('OPENCODEX_CONSENT_OUTCOME=no_callback');
   }
 } else {
-  const { spawnSync } = await import('node:child_process');
-  const submit = spawnSync(process.execPath, [ACCOUNT_CLI, 'submit', '--auth-file', AUTH_FILE], {
-    input: callback + '\\n',
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: 60_000,
-  });
+  cliLog('OPENCODEX_CALLBACK=' + callback);
+  cliLog('OPENCODEX_CONSENT_OUTCOME=callback_captured');
   callback = null;
-  cliLog('OPENCODEX_CONSENT_OUTCOME=' + (submit.status === 0 ? 'callback_accepted' : 'submit_failed'));
 }
 `;
 
@@ -155,9 +155,9 @@ function canonicalCancel() {
   return localStateIsCleared() || result.status === 0;
 }
 
-function failClosed(outcome, code) {
+function failClosed(outcome, code, extra = null) {
   const cleanupCompleted = canonicalCancel();
-  console.error(JSON.stringify({ outcome, cleanupCompleted }));
+  console.error(JSON.stringify({ outcome, cleanupCompleted, ...(extra ? extra : {}) }));
   process.exit(code);
 }
 
@@ -169,8 +169,20 @@ const browser = spawnSync("ego-browser", ["nodejs"], {
 });
 const combined = `${browser.stdout || ""}\n${browser.stderr || ""}`;
 const browserOutcome = (combined.match(/OPENCODEX_CONSENT_OUTCOME=([a-z_]+)/gu) || []).at(-1)?.split("=")[1];
-if (browser.status !== 0 || browserOutcome !== "callback_accepted") {
+if (browser.status !== 0 || browserOutcome !== "callback_captured") {
   failClosed(browserOutcome || (browser.status === 0 ? "no_callback" : "browser_failed"), 4);
+}
+const callbackUrl = (combined.match(/OPENCODEX_CALLBACK=([^\n]+)/u) || [])[1] || null;
+if (!callbackUrl) failClosed("callback_lost", 4);
+// Submit from the real parent runtime; the callback enters the driver via stdin only.
+const submit = spawnSync(process.execPath, [CLI, "submit", "--auth-file", authFile], {
+  input: callbackUrl + "\n",
+  encoding: "utf8",
+  maxBuffer: 8 * 1024 * 1024,
+  timeout: 120_000,
+});
+if (submit.status !== 0) {
+  failClosed("submit_failed", 4, { submitError: mask(String(submit.stderr || submit.stdout || "")).trim().slice(0, 300) || null });
 }
 console.log(JSON.stringify({
   outcome: "callback_accepted",

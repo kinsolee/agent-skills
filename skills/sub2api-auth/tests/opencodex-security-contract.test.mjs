@@ -55,11 +55,16 @@ test("callback state binds to the hash stored for the current flow", () => {
   assert.throws(() => parseOAuthCallback(callbackUrl({ state: "other-placeholder" }), { expectedStateHash }));
 });
 
-test("consent driver never emits a callback transfer marker", () => {
+test("consent driver hands the callback to submit via stdin only", () => {
   const source = readFileSync(new URL("../scripts/flow-opencodex-consent.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /B64.*CALLBACK|CALLBACK.*B64/iu);
-  assert.match(source, /input:\s*callback\s*\+/u);
-  assert.match(source, /OPENCODEX_CONSENT_OUTCOME=.*callback_accepted/u);
+  // 2026-08-12: submit runs in the real parent runtime; the callback reaches it
+  // through stdin only, never argv, and submission diagnostics are masked.
+  assert.match(source, /input:\s*callbackUrl\s*\+/u);
+  assert.match(source, /\[CLI, "submit", "--auth-file", authFile\]/u);
+  assert.match(source, /OPENCODEX_CONSENT_OUTCOME=callback_captured/u);
+  assert.match(source, /outcome: "callback_accepted"/u);
+  assert.match(source, /submitError: mask\(/u);
 });
 
 test("callback validation failure invokes canonical cancel and clears local state", async () => {

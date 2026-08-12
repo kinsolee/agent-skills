@@ -11,13 +11,13 @@ evidence:
 
 account-pool evidence:
 - `evidence_status`: `live_verified`
-- `captured_at`: `2026-08-12T07:18:23Z`
-- `endpoint_method`: `GET /api/codex-auth/accounts?refresh=1`
-- `provenance`: public management API with all three auth headers; four returned `refresh_failed` rows were each checked through a real isolated OpenAI OAuth flow
+- `captured_at`: `2026-08-12T11:36:00Z`
+- `endpoint_method`: `GET /api/codex-auth/accounts?refresh=1` plus `DELETE /api/codex-auth/accounts?id=…` and the full login/status/submit flow chain
+- `provenance`: public management API with all three auth headers; eight `refresh_failed` rows were each classified through real isolated OpenAI OAuth flows — four confirmed `account_deactivated` and deleted with readback, four reauthorized end to end (callback submitted, credential persisted, same-account force-refresh returned `healthy`)
 - `redaction_notes`: deployment hostname, LAN addresses, account counts and identities, OAuth URLs, flow IDs, callback URLs, request IDs, passwords, MFA values, and credential values are omitted
 - `source_sha256`: `a421aa1c3f3f8d42b4cc608a3baf8c13e12c8eed47854ea22e2df98e5b1138d7` (raw successful account JSON response)
-- `live_verified_scope`: inventory/force-refresh response, flow start/login, explicit `account_deactivated`, and unavailable-second-factor failure branches
-- `not_live_verified`: callback submission, credential persistence, and a same-account fresh-health success after reauthorization
+- `live_verified_scope`: inventory/force-refresh response, flow start/login, explicit `account_deactivated`, unavailable-second-factor failure branches, `DELETE` of terminal accounts with pool readback, callback submission, credential persistence, same-account fresh-health success after reauthorization, and data-plane `/v1/models` + streaming `/v1/responses` acceptance (the deployment requires `stream: true`; `stream: false` returns 400 `Stream must be set to true`)
+- `not_live_verified`: none for the documented reauthorization path; two flows ended in a non-terminal `oauth_error` after an accepted submission and succeeded on a fresh retry, so treat that state as transient, never as account deactivation
 
 data-plane evidence boundary:
 - `evidence_status`: `live_verified` separately from account reauthorization
@@ -115,7 +115,7 @@ Process one account at a time because the underlying ChatGPT OAuth flow is provi
 2. Run the existing `flow-login.mjs` with the matching Base record, task-space ID, and auth file. Choose MFA using the same MFA-first host rules as Sub2API.
 3. At consent, run `flow-opencodex-consent.mjs`. It records a navigation baseline before the identity gate, verifies the exact Base email, clicks consent, and accepts only a later navigation. In-process parsing requires HTTP loopback host `localhost` or `127.0.0.1`, exact `/auth/callback`, and exactly one non-empty `code` and `state`; an explicit error callback fails closed. `start` hashes a unique `state` from the protected auth URL when available and the consent/submit paths require that hash to match. If the auth URL has no directly derivable state, local binding is unavailable and the pending server flow performs the authoritative flow/state validation; do not describe that branch as locally state-bound. Callback material enters neither argv nor emitted output.
 4. Any identity, consent, callback-validation, browser, or submit failure invokes canonical `cancel`, which attempts the server cancellation and always clears the local auth file and matching lock. Emit only the non-sensitive outcome and whether cleanup completed.
-5. Poll `opencodex-account.mjs status --auth-file ...` until the flow reports `done`, then immediately run `check --refresh` and require the same pool ID to be healthy with a persisted credential. This success sequence is required acceptance but is not yet live-verified.
+5. Poll `opencodex-account.mjs status --auth-file ...` until the flow reports `done`, then immediately run `check --refresh` and require the same pool ID to be healthy with a persisted credential. This success sequence is live-verified 2026-08-12 on four pool accounts. A non-terminal `oauth_error` at this stage is transient: local state is already sanitized, so restart the flow from `start` and retry once before escalating.
 6. `status` sanitizes the auth file and releases the driver lock when the remote flow reaches `done`, `error`, or `expired`; these are flow-lifecycle cleanup states, not terminal account classifications. Only an explicit OpenAI `account_deactivated` result is terminal for the account. After cleanup, close the dedicated task space and read back that the auth file is zero bytes and the fixed lock is absent.
 
 OpenCodex enforces same-identity reauth: a different ChatGPT identity is rejected rather than overwriting the trusted pool slot. A pending flow must exist before callback submission; manual callback submission is not a way around flow creation.
