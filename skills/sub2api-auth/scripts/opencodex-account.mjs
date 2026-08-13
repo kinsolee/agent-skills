@@ -410,8 +410,8 @@ export async function submitCallback({
 async function main() {
   const args = process.argv.slice(2);
   const command = args.shift();
-  const knownCommands = new Set(["check", "start", "status", "submit", "cancel"]);
-  if (!knownCommands.has(command)) fail("usage: opencodex-account.mjs <check|start|status|submit|cancel> ...", 2);
+  const knownCommands = new Set(["check", "start", "status", "submit", "cancel", "delete"]);
+  if (!knownCommands.has(command)) fail("usage: opencodex-account.mjs <check|start|status|submit|cancel|delete> ...", 2);
 
   const option = (name) => {
     const index = args.indexOf(name);
@@ -473,27 +473,37 @@ async function main() {
     return;
   }
 
-  if (command === "start") {
-    const accountId = option("--id");
-    const authFile = option("--auth-file");
-    if (!accountId || !authFile || args.length) fail("usage: opencodex-account.mjs start --id <account-id> --auth-file <path>", 2);
-    acquireFlowLock(authFile);
-    try {
-      writeProtectedAuthFile(authFile, "");
-      const payload = await request("POST", "/api/codex-auth/login", { id: accountId, reauth: true });
-      if (typeof payload.flowId !== "string" || !payload.flowId || typeof payload.url !== "string" || !payload.url) {
-        throw new Error("OpenCodex login start did not return required flow metadata");
-      }
-      const oauthStateHash = oauthStateHashFromAuthorizationUrl(payload.url);
-      writeProtectedAuthFile(authFile, `${JSON.stringify({
-        accountId,
-        flowId: payload.flowId,
-        authUrl: payload.url,
-        oauthStateHash,
-      })}\n`);
-      console.log(JSON.stringify({
-        outcome: "started",
-        stateBinding: oauthStateHash ? "local_hash" : "server_flow_only",
+ if (command === "start") {
+   const accountId = option("--id");
+    const addMode = flag("--add");
+   const authFile = option("--auth-file");
+    if (!authFile || args.length) fail("usage: opencodex-account.mjs start --add --auth-file <path>  |  start --id <account-id> --auth-file <path>", 2);
+    if (addMode && accountId) fail("--add cannot be combined with --id", 2);
+    if (!addMode && !accountId) fail("reauth requires --id; use --add to start a new-account flow", 2);
+   acquireFlowLock(authFile);
+   try {
+     writeProtectedAuthFile(authFile, "");
+      // 2026-08-13: --add starts a new-account flow. Omitting id/reauth calls the same
+      // /api/codex-auth/login route the dashboard "Add account" button uses; the server assigns
+      // chatgpt-<ts> and persists the credential on completion. The placeholder accountId only
+      // satisfies readAuthFile's non-empty check; submit and login-status key off flowId, and the
+      // real pool id returns in the login-status response (see status command).
+      const loginBody = addMode ? {} : { id: accountId, reauth: true };
+      const payload = await request("POST", "/api/codex-auth/login", loginBody);
+     if (typeof payload.flowId !== "string" || !payload.flowId || typeof payload.url !== "string" || !payload.url) {
+       throw new Error("OpenCodex login start did not return required flow metadata");
+     }
+     const oauthStateHash = oauthStateHashFromAuthorizationUrl(payload.url);
+      const fileAccountId = addMode ? "__add_pending__" : accountId;
+     writeProtectedAuthFile(authFile, `${JSON.stringify({
+        accountId: fileAccountId,
+       flowId: payload.flowId,
+       authUrl: payload.url,
+       oauthStateHash,
+     })}\n`);
+     console.log(JSON.stringify({
+        outcome: addMode ? "started_add" : "started",
+       stateBinding: oauthStateHash ? "local_hash" : "server_flow_only",
         hasInstructions: Boolean(payload.instructions),
       }));
     } catch (error) {
@@ -538,6 +548,23 @@ async function main() {
     const input = await readStdin();
     const callback = await submitCallback({ authFile, auth, input, request });
     console.log(JSON.stringify({ outcome: "callback_accepted", stateBinding: callback.stateBinding }));
+    return;
+  }
+
+  if (command === "delete") {
+    // 2026-08-13: delete a pool account row (terminal accounts, e.g. account_deactivated).
+    // Destructive — caller-authorized. DELETE /api/codex-auth/accounts?id=<id>; 200/202/204 = removed.
+    const accountId = option("--id");
+    if (!accountId || args.length) fail("usage: opencodex-account.mjs delete --id <account-id>", 2);
+    const delUrl = new URL(`/api/codex-auth/accounts`, `${origin.origin}${origin.pathname || "/"}`);
+    delUrl.searchParams.set("id", accountId);
+    const response = await fetch(delUrl, { method: "DELETE", redirect: "manual", headers, signal: AbortSignal.timeout(60_000) });
+    const responseText = await response.text();
+    if (response.status !== 200 && response.status !== 202 && response.status !== 204) {
+      const digest = createHash("sha256").update(responseText).digest("hex");
+      throw new Error(`delete returned HTTP ${response.status}; response_sha256=${digest}`);
+    }
+    console.log(JSON.stringify({ outcome: "deleted", id: accountId, http: response.status }));
     return;
   }
 

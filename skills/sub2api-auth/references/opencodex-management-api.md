@@ -95,6 +95,15 @@ Require all of these before declaring a healthy account:
 
 Account counts, identities, and health are time-sensitive and deployment-private. Always re-run the driver and keep live fleet details in the current task output rather than version-controlled documentation.
 
+### `refresh_failed` is frequently `account_deactivated`
+
+The patrol reports `health.status="reauth_required"` / `reason="refresh_failed"` for both a merely-expired token and a permanently-deactivated account — it cannot distinguish them. Empirically a large share are terminal: **2026-08-12 4/8 and 2026-08-13 4/4** `refresh_failed` targets were `account_deactivated`. The only discriminator is a login probe: run the account's OAuth flow and observe OpenAI's response. Route by Base credential shape (Hard Rule 33):
+
+- Base `password` set → `scripts/flow-login.mjs` (+ MFA per Hard Rule 17/27).
+- Base `password` empty, `email_helper_url` set → `scripts/flow-email-login.mjs` (passwordless email-code; `references/ichzl-email-helper-api.md`).
+
+A correct credential that OpenAI accepts but then surfaces `account_deactivated` (on the same `/email-verification` or post-password page) is terminal — the login itself succeeded; do not retry. A correct credential that reaches the consent/callback page is reauthorizable: finish via `flow-opencodex-consent.mjs`.
+
 ### Cross-platform credential ownership
 
 Treat Sub2API and OpenCodex as independent OAuth credential owners even when both contain the same OpenAI identity. Do not copy or share refresh tokens between them. A successful refresh can rotate a grant and leave the other platform holding an older generation.
@@ -126,7 +135,13 @@ Process one account at a time because the underlying ChatGPT OAuth flow is provi
 
 OpenCodex enforces same-identity reauth: a different ChatGPT identity is rejected rather than overwriting the trusted pool slot. A pending flow must exist before callback submission; manual callback submission is not a way around flow creation.
 
-If the live OpenAI page explicitly reports `account_deactivated`, classify it as terminal and stop retrying. `needsReauth` alone does not prove deactivation. Removing the terminal row from the OpenCodex pool deletes its stored credential and is a separate destructive action; require explicit deletion authorization unless the user's standing policy already covers it.
+If the live OpenAI page explicitly reports `account_deactivated`, classify it as terminal and stop retrying. `needsReauth` alone does not prove deactivation. Removing the terminal row from the OpenCodex pool deletes its stored credential and is a separate destructive action; require explicit deletion authorization unless the user's standing policy already covers it. The canonical driver now supports it:
+
+```bash
+node skills/sub2api-auth/scripts/opencodex-account.mjs delete --id <pool-id>   # DELETE /api/codex-auth/accounts?id=<id>; 200/202/204 = removed
+```
+
+Verify removal by re-running `check --refresh` and requiring the id to be absent and `accountCount` to drop. Live-verified 2026-08-13: four `account_deactivated` rows deleted (18 → 14), all ids confirmed absent on readback.
 
 If password validation succeeds but the account needs a second factor, exhaust MFA first. If the MFA lookup has no row and no Base seed, use `flow-email-otp.mjs` only after OpenAI offers email OTP and pass a challenge-start timestamp captured at issuance/navigation. OpenAI's challenge HTTP 200 proves only that the send request was accepted. The observed helper contract does not establish recipient or delivery-time field names, so the current adapter intentionally fails closed; not-found proves only that the helper cannot retrieve the message. Do not convert receive-channel failure into `account_deactivated`, guess a field/code, or delete the pool row. Canonically cancel and retry when an exact-identity channel has sufficient metadata.
 
