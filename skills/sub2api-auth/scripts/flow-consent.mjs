@@ -9,8 +9,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "sub2api-admin-api.mjs");
 const argv = process.argv.slice(2);
 const rec = argv[0], spaceId = argv[1];

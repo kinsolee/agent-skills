@@ -4,8 +4,8 @@
 // Usage: node flow-login.mjs <gpt_record_id> <space_id> <auth_file.json>
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const [, , rec, spaceId, authFile] = process.argv;
 if (!rec || !spaceId || !authFile) { console.error("usage: flow-login.mjs <record_id> <space_id> <auth_file>"); process.exit(2); }
 const j = JSON.parse(execFileSync("lark-cli", ["base", "+record-get", "--base-token", BASE, "--table-id", TABLE,

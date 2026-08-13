@@ -9,8 +9,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const HELPER_ENDPOINT = "https://email.nloop.cc/api/icloud/query";
 const EMAIL_CHALLENGE_PATH = "/mfa-challenge/email-otp";
 const MAX_CHALLENGE_AGE_MS = 30 * 60 * 1_000;

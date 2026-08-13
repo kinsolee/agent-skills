@@ -6,8 +6,8 @@
 // Usage: node flow-jihuo-mfa.mjs <record_id> <space_id>
 // (reads mfa_platform_url from Base; must include the "#<fragment>" hash)
 import { execFileSync, spawnSync } from "node:child_process";
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const [, , rec, spaceId] = process.argv;
 if (!rec || !spaceId) { console.error("usage: flow-jihuo-mfa.mjs <record_id> <space_id>"); process.exit(2); }
 const j = JSON.parse(execFileSync("lark-cli", ["base", "+record-get", "--base-token", BASE, "--table-id", TABLE,

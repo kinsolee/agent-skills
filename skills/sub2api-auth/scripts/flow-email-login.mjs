@@ -22,8 +22,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const [, , rec, spaceId, authFile] = process.argv;
 if (!rec || !spaceId || !authFile) {
   console.error("usage: flow-email-login.mjs <record_id> <space_id_or_name> <auth_file>");

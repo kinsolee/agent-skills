@@ -7,8 +7,8 @@
 // (Hard Rule 22) and never appears in cliLog/stdout.
 // Usage: node flow-mfa.mjs <record_id> <space_id> [platform_url]
 import { execFileSync, spawnSync } from "node:child_process";
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const [, , rec, spaceId, platformUrl] = process.argv;
 if (!rec || !spaceId) { console.error("usage: flow-mfa.mjs <record_id> <space_id> [platform_url]"); process.exit(2); }
 const PLATFORM = platformUrl || "https://2fa.nloop.cc/";

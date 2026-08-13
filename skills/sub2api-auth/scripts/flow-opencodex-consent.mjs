@@ -14,8 +14,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { flowLockPath, readAuthFile } from "./opencodex-account.mjs";
 
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const TABLE = "tblV3Y2NDUvlbCVU";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "opencodex-account.mjs");
 const [, , recordId, spaceId, authFile] = process.argv;
 if (!recordId || !spaceId || !authFile || !Number.isSafeInteger(Number(spaceId)) || Number(spaceId) <= 0) {

@@ -10,8 +10,8 @@
 // SMS code round=4 elapsed=11 s after 重新发送短信 + Page.reload.
 // Usage: node flow-add-phone.mjs <gpt_record_id> <sim_record_id> <space_id>
 import { execFileSync, spawnSync } from "node:child_process";
-const BASE = "XB3sbTJKlagVTusMWhzcYRzin4e";
-const SIM_T = "tbljWgJs2iO1HeT6";
+import { resolveBase } from "./feishu-base.mjs";
+const { baseToken: BASE, simCardsTableId: SIM_T } = resolveBase();
 const [, , gptRec, simRec, spaceId] = process.argv;
 if (!gptRec || !simRec || !spaceId) { console.error("usage: flow-add-phone.mjs <gpt_record_id> <sim_record_id> <space_id>"); process.exit(2); }
 const SIM = JSON.parse(execFileSync("lark-cli", ["base", "+record-get", "--base-token", BASE, "--table-id", SIM_T,
