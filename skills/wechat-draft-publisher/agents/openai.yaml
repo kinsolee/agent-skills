@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号草稿发布"
+  short_description: "安全地将 Markdown 写入公众号草稿箱并回读验证"
+  default_prompt: "使用 $wechat-draft-publisher 预检这篇 Markdown，写入公众号草稿箱并回读验证。"

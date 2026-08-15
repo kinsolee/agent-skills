@@ -16,6 +16,7 @@ Deployment hostnames, LAN addresses, and credentials belong in gitignored local 
 | Skill | Description |
 |-------|-------------|
 | [sub2api-auth](skills/sub2api-auth/) | Automate OpenAI OAuth account authorization and re-authorization for Sub2API and OpenCodex |
+| [wechat-draft-publisher](skills/wechat-draft-publisher/) | Safely render Markdown, create a WeChat Official Account draft, and verify it by API readback |
 
 ## Usage
 
