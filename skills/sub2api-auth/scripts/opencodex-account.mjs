@@ -84,7 +84,13 @@ function managementOrigin(projectEnv) {
   url.pathname = url.pathname.replace(/\/v1\/?$/u, "").replace(/\/$/u, "");
   url.search = "";
   url.hash = "";
-  if (url.protocol !== "https:") throw new Error("The OpenCodex account driver requires HTTPS");
+  // 2026-08-16: plain HTTP is allowed only for loopback management origins (a
+  // local OpenCodex instance, e.g. http://127.0.0.1:10100); every non-loopback
+  // deployment still requires HTTPS.
+  const isLoopback = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) {
+    throw new Error("The OpenCodex account driver requires HTTPS (plain HTTP is loopback-only)");
+  }
   return url;
 }
 

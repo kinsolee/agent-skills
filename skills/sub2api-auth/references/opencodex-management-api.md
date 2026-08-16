@@ -155,3 +155,12 @@ Account health is management-plane evidence, not end-to-end gateway acceptance. 
 4. The deployment requires `stream: true` on `/v1/responses`; `stream: false` returns HTTP 400 `Stream must be set to true`. Parse the SSE stream for `response.completed` and the output marker (proven 2026-08-12).
 
 Successful model listing alone does not prove generation or account-pool delivery.
+
+## Local loopback deployment shape (2026-08-16, live-verified)
+
+A local OpenCodex instance (`bun @bitkyc08/opencodex` listening on `http://127.0.0.1:10100`, discovered via `openai_base_url` in `~/.codex/config.toml`) differs from the Cloudflare-Access deployment in four verified ways:
+
+- **Management origin is plain HTTP, loopback-only.** `managementOrigin()`/`managementEndpoint()` accept `http:` only for `localhost`/`127.0.0.1`/`::1`; non-loopback origins still fail closed on non-HTTPS. `OCX_ADMIN_BASE` in the project `.env` points at the loopback origin.
+- **The management token is the instance's own `~/.opencodex/admin-api-token`.** A token from another deployment (e.g. the previous LAN instance) returns 401; sync it into `OCX_ADMIN_AUTH_TOKEN` process-locally and never print it. The Cloudflare Access headers are still required by the driver's `required()` gate but are ignored by the local instance.
+- **`POST /api/codex-auth/login` opens the system default browser server-side** (`src/codex/auth-api.ts` → `openUrl(result.url)` → macOS `open`). Every `start --add`/`start --id` pops the auth page in the user's default browser (e.g. Edge) — redundant with the ego-browser flow, unconditional, and without a config switch. Users must not interact with that page (it can consume the OAuth code of the pending flow).
+- **`--add` batch-proven at scale.** 2026-08-16: 22 Base-`active` accounts processed one at a time; 14 added and healthy (`start --add` → `flow-login` → `flow-mfa`/`flow-totp-local` → `flow-opencodex-consent` → `status` → `check --refresh`), 7 terminal `account_deactivated` at the password step (`错误代码：account_deactivated` on `/log-in/password`), 1 parked after two accepted-callback `oauth_error` exchanges failed to persist. A post-persist transient `oauth_error` in `status` does NOT prove failure — verify the pool (`check`) before retrying; two accounts succeeded despite it. The earliest-added accounts can show `refresh_failed` on the next patrol when another platform (Sub2API heartbeat) rotates the same OpenAI grant — fix with the normal `start --id` reauth flow, after which the pool returned to 15/15 healthy.

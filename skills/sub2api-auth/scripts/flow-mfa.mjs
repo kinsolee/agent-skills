@@ -51,8 +51,16 @@ const CODE = ${JSON.stringify(got.code)};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const mask = (s) => String(s).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/g, (x) => x.slice(0, 2) + '***' + x.slice(x.indexOf('@')));
 await useOrCreateTaskSpace(${JSON.stringify(Number(spaceId))});
-const tabs = await listTabs();
-const mfa = tabs.find(t => String(t.url || '').includes('/mfa-challenge/'));
+// 2026-08-16: OpenAI sometimes lands on the email-OTP page first with a
+// 尝试其他方法 link to /mfa-challenge. Click through to the authenticator
+// page (Hard Rule 17 MFA-first) before searching tabs for the challenge.
+let tabs = await listTabs();
+if (!tabs.some(t => String(t.url || '').includes('/mfa-challenge'))) {
+  const switched = await js(String.raw\`(() => { const a = document.querySelector('a[href*="/mfa-challenge"]'); if (!a) return 'no_link'; try { a.click(); return 'clicked'; } catch { return 'click_error'; } })()\`);
+  cliLog('mfa_switch=' + switched);
+  if (switched === 'clicked') { await sleep(3500); tabs = await listTabs(); }
+}
+const mfa = tabs.find(t => String(t.url || '').includes('/mfa-challenge'));
 if (!mfa) { cliLog('NO_MFA_TAB'); }
 else {
   await switchTab(mfa);
