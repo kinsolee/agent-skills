@@ -18,6 +18,7 @@ import {
 
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI_PATH = path.join(SKILL_DIR, "scripts", "wechat_draft.mjs");
+const LAUNCHER_PATH = path.join(SKILL_DIR, "scripts", "wechat_draft.sh");
 const ONE_PIXEL_PNG = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     "base64",
@@ -148,4 +149,33 @@ cover: cover.png
     assert.equal(output.action, "dry_run");
     assert.equal(output.external_write, false);
     assert.equal(output.ready_for_execute, false);
+});
+
+test("launcher 检测代理变量并在 Node 启动前启用环境代理", async (t) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "wechat-draft-launcher-"));
+    t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+    const fakeNode = path.join(tempDir, "node");
+    await fs.writeFile(fakeNode, `#!/bin/sh
+printf '%s\\n' "\${NODE_USE_ENV_PROXY-unset}" "$1" "$2"
+`);
+    await fs.chmod(fakeNode, 0o755);
+
+    const result = spawnSync(LAUNCHER_PATH, ["--help"], {
+        cwd: SKILL_DIR,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            PATH: `${tempDir}:${process.env.PATH}`,
+            HTTP_PROXY: "http://127.0.0.1:8234",
+            HTTPS_PROXY: "",
+            ALL_PROXY: "",
+            NODE_USE_ENV_PROXY: "",
+        },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const [proxyFlag, scriptPath, argument] = result.stdout.trim().split("\n");
+    assert.equal(proxyFlag, "1");
+    assert.equal(scriptPath, CLI_PATH);
+    assert.equal(argument, "--help");
 });

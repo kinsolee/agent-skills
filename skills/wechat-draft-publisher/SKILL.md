@@ -28,6 +28,8 @@ Use Node.js 20 or later. From this skill directory, install the locked dependenc
 npm ci --ignore-scripts
 ```
 
+Invoke the bundled `scripts/wechat_draft.sh` launcher for all commands. When standard proxy variables are present, it enables Node's environment-proxy support before native `fetch()` starts. It does not modify system proxy settings and preserves an explicit `NODE_USE_ENV_PROXY` value.
+
 Provide credentials through the process environment or an explicitly selected gitignored env file:
 
 ```bash
@@ -48,7 +50,7 @@ Confirm the Markdown path, selected cover, and intended target account. Check th
 Run the local preflight. This command performs no network call and no external write:
 
 ```bash
-node scripts/wechat_draft.mjs draft \
+scripts/wechat_draft.sh draft \
   --markdown "/absolute/path/article.md" \
   --cover "/absolute/path/cover.png"
 ```
@@ -62,7 +64,7 @@ If the article contains those annotations but no real images, report that the dr
 Run the network doctor only after the account and credential source are known:
 
 ```bash
-node scripts/wechat_draft.mjs doctor --network --env-file "/absolute/path/.env"
+scripts/wechat_draft.sh doctor --network --env-file "/absolute/path/.env"
 ```
 
 This obtains or imports an access token and reads the draft count. It does not create, update, publish, or delete content. Treat error `40164` as an IP-whitelist failure.
@@ -76,7 +78,7 @@ Immediately before execution, state that the command will upload the cover, uplo
 Run the same command with `--execute`:
 
 ```bash
-node scripts/wechat_draft.mjs draft \
+scripts/wechat_draft.sh draft \
   --markdown "/absolute/path/article.md" \
   --cover "/absolute/path/cover.png" \
   --env-file "/absolute/path/.env" \
@@ -90,7 +92,7 @@ The script creates the draft and immediately calls `draft/get`. Accept completio
 Use the read-only command when a previous run returned a media ID:
 
 ```bash
-node scripts/wechat_draft.mjs get \
+scripts/wechat_draft.sh get \
   --media-id "MEDIA_ID" \
   --env-file "/absolute/path/.env"
 ```
