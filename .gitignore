@@ -13,7 +13,8 @@ test-results/
 .reauth-backup.txt
 .worktrees/
 state/
-skills/sub2api-auth/state/
+# Local compatibility link to the existing scheduler state (not a directory).
+/plugins/sub2api-auth/state
 # scratch from in-place sed edits
 *.bak
 *.bak.*

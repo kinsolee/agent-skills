@@ -1,0 +1,32 @@
+{
+  "name": "kinsolee",
+  "interface": {
+    "displayName": "Kinsolee 的 Codex 插件"
+  },
+  "plugins": [
+    {
+      "name": "sub2api-auth",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sub2api-auth"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "wechat-draft-publisher",
+      "source": {
+        "source": "local",
+        "path": "./plugins/wechat-draft-publisher"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

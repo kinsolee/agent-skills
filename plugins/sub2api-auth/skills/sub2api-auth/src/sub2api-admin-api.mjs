@@ -21,6 +21,8 @@
 // helper unwraps `data`. The test endpoint returns an SSE stream instead.
 
 import { readEnvFile } from "./_env.mjs";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 function resolveConfig() {
   const fileEnv = readEnvFile();
@@ -492,7 +494,7 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((err) => { console.error(err.message || String(err)); process.exit(1); });
 }
 

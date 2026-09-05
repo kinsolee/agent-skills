@@ -24,13 +24,17 @@ It will:
 ## Setup
 
 ```bash
-npm install
-cp .env.example .env
+npm ci --ignore-scripts
+# From this skill directory, create private configuration at the plugin root.
+# Do not overwrite an existing file.
+test -e ../../.env || cp .env.example ../../.env
 ```
 
 Read [SKILL.md](SKILL.md) before running a live account flow. It contains the source-specific safety rules, exact verification gates, and the canonical script inventory.
 
-## Common probes
+## Operational commands
+
+These commands contact live systems and may mutate accounts or Base records; they are not installation tests. For offline checks use `npm test`.
 
 Sub2API monitoring:
 

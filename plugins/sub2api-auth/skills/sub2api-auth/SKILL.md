@@ -7,6 +7,10 @@ description: Manage OpenAI OAuth accounts, re-authorization, provider deliveries
 
 Agent-driven automation for the full lifecycle of OpenAI OAuth accounts in sub2api. Uses ego-browser for all browser operations, Feishu Base for persistence, and visual models for page understanding.
 
+## Plugin paths
+
+The installed plugin root contains this `skills/sub2api-auth/` directory and the sibling top-level `src/` runners. Run commands beginning with `skills/sub2api-auth/` or `src/` from that plugin root; use the actual installed path supplied by Codex. `references/` and `scripts/` links are relative to this skill directory. Installation does not activate the scheduled workflow below. See [plugin setup](../../README.md) before first use.
+
 ## Supported Platforms
 
 Support only these account-management platforms:

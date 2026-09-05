@@ -6,11 +6,10 @@
 // fails closed until a real response establishes those metadata names.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import path from "node:path";
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { resolveBase } from "./feishu-base.mjs";
-const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 const HELPER_ENDPOINT = "https://email.nloop.cc/api/icloud/query";
 const EMAIL_CHALLENGE_PATH = "/mfa-challenge/email-otp";
 const MAX_CHALLENGE_AGE_MS = 30 * 60 * 1_000;
@@ -122,6 +121,7 @@ async function main() {
     process.exit(2);
   }
   const { recordId, spaceId, challengeStartedAtMs } = parsed;
+  const { baseToken: BASE, gptAccountsTableId: TABLE } = resolveBase();
 
   const row = JSON.parse(execFileSync("lark-cli", [
     "base", "+record-get", "--base-token", BASE, "--table-id", TABLE,
@@ -238,5 +238,5 @@ if (!auth) {
 }
 
 const isDirectExecution = process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+  && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 if (isDirectExecution) await main();

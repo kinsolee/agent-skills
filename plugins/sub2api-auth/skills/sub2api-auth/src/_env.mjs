@@ -13,7 +13,7 @@ export function readEnvFile() {
     try { return fileURLToPath(import.meta.url); } catch { return null; }
   })();
   const candidates = [
-    here ? path.resolve(path.dirname(here), "../../../../.env") : null,
+    here ? path.resolve(path.dirname(here), "../../../.env") : null,
     path.resolve(process.cwd(), ".env"),
   ].filter(Boolean);
   for (const file of candidates) {

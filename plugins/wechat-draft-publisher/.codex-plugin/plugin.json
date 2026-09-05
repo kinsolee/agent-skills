@@ -1,0 +1,21 @@
+{
+  "name": "wechat-draft-publisher",
+  "version": "0.1.0",
+  "description": "将 Markdown 转成公众号草稿并回读验证",
+  "author": {
+    "name": "kinsolee",
+    "url": "https://github.com/kinsolee"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "微信公众号草稿发布",
+    "shortDescription": "将 Markdown 转成公众号草稿并回读验证",
+    "longDescription": "预检 Markdown、封面和正文图片，按授权创建微信公众号草稿并回读验证。支持本地预检；正式发布和删除不在范围内。",
+    "developerName": "kinsolee",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "使用 wechat-draft-publisher 对我的 Markdown 做本地预检，先不要上传。"
+    ]
+  }
+}

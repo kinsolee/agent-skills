@@ -1,0 +1,21 @@
+{
+  "name": "sub2api-auth",
+  "version": "0.1.0",
+  "description": "管理 OpenAI OAuth 账号授权、重新授权及账号池巡检",
+  "author": {
+    "name": "kinsolee",
+    "url": "https://github.com/kinsolee"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Sub2API / OpenCodex 账号管理",
+    "shortDescription": "管理 OpenAI OAuth 账号授权、重新授权及账号池巡检",
+    "longDescription": "为 Sub2API 和 OpenCodex 提供账号授权、MFA、手机号验证及飞书记录协作流程。首次使用需配置管理端、ego-browser 和 lark-cli；安装不会自动运行巡检或修改账号。",
+    "developerName": "kinsolee",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "使用 sub2api-auth 查看安装前置条件和可用流程，不执行账号操作。"
+    ]
+  }
+}
