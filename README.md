@@ -10,6 +10,7 @@ Kinsolee 维护的 Agent Skills 仓库，面向支持相应规范的 AI harness�
 | --- | --- | --- |
 | [sub2api-auth](plugins/sub2api-auth/README.md) | Sub2API / OpenCodex 的 OpenAI OAuth 授权、重新授权及账号池巡检 | Node.js、ego-browser、已登录的 lark-cli、管理端配置 |
 | [wechat-draft-publisher](plugins/wechat-draft-publisher/README.md) | Markdown 本地预检、微信公众号草稿创建与回读验证 | Node.js 20+；写入草稿时需要公众号凭据与 IP 白名单 |
+| [codex-task-management](plugins/codex-task-management/skills/codex-task-management/SKILL.md) | Codex 主控与模块任务的派工、评审、人工验收、集成和收尾 | Codex 原生任务工具；无需安装脚本依赖 |
 
 安装只加载技能和脚本，不自动执行账号操作、创建定时任务或上传文章。实际使用前阅读对应 `SKILL.md`，遵守其中的目标确认、授权及读回要求。
 
@@ -18,6 +19,8 @@ Kinsolee 维护的 Agent Skills 仓库，面向支持相应规范的 AI harness�
 按目标 harness 的技能发现或注册方式，指向 `plugins/<name>/skills/<name>/`；无需解析 Codex 插件清单也可以读取其中的 `SKILL.md`。是否支持目录链接、脚本执行及外部工具，以该 harness 的实现为准。
 
 `wechat-draft-publisher` 的运行文件位于技能目录内。`sub2api-auth` 还依赖插件根的 `src/` 调度脚本，因此使用它时保留完整的 `plugins/sub2api-auth/` 包，并按说明设置工作目录。Node.js、ego-browser、lark-cli、凭据及调度能力仍需在目标环境配置；其他 harness 的完整业务流程尚未逐一验证。
+
+`codex-task-management` 的任务操作依赖 Codex 原生工具；其他 harness 仅能读取其规则，完整协作流程需有对应能力并另行验证。
 
 ## 安装到 Codex
 
@@ -33,11 +36,12 @@ codex plugin marketplace add kinsolee/agent-skills
 # 按需选择，可只运行其中一条
 codex plugin add sub2api-auth@kinsolee
 codex plugin add wechat-draft-publisher@kinsolee
+codex plugin add codex-task-management@kinsolee
 
 codex plugin list --marketplace kinsolee
 ```
 
-在客户端插件页也可以从该市场分别选择插件。安装后新建一个 Codex 任务，以加载新技能；在任务里调用 `sub2api-auth` 或 `wechat-draft-publisher`。
+在客户端插件页也可以从该市场分别选择插件。安装后新建一个 Codex 任务，以加载新技能；在任务里调用所选技能。
 
 ### 从本地工作区验证
 
@@ -49,6 +53,7 @@ python3 scripts/export-marketplace.py /absolute/path/agent-skills-local
 codex plugin marketplace add /absolute/path/agent-skills-local
 codex plugin add sub2api-auth@kinsolee
 codex plugin add wechat-draft-publisher@kinsolee
+codex plugin add codex-task-management@kinsolee
 codex plugin list --marketplace kinsolee
 ```
 
@@ -58,7 +63,7 @@ codex plugin list --marketplace kinsolee
 
 ### 依赖、更新与卸载
 
-插件安装不等于安装 Node.js 依赖。在 Codex 提供的技能绝对路径下，按插件 README 执行 `npm ci --ignore-scripts`。凭据使用环境变量或私有配置，不放入版本控制，也不要依赖插件缓存永久保存凭据和运行状态。
+含脚本的插件安装不等于安装 Node.js 依赖。在 Codex 提供的技能绝对路径下，按插件 README 执行 `npm ci --ignore-scripts`。`codex-task-management` 只包含规则、任务书/回执模板和界面元数据，无需此步骤。凭据使用环境变量或私有配置，不放入版本控制，也不要依赖插件缓存永久保存凭据和运行状态。
 
 远端更新时先运行 `codex plugin marketplace upgrade kinsolee`，再重新执行所需插件的 `codex plugin add`。维护者需为内容更新修改相应插件的版本；本地调试可使用 `plugin-creator` 的 cachebuster 更新流程，然后重新导出到一个新目录并切换本地来源。
 
@@ -82,6 +87,9 @@ plugins/
     .codex-plugin/plugin.json
     README.md
     skills/wechat-draft-publisher/     # SKILL.md、scripts、references、tests
+  codex-task-management/
+    .codex-plugin/plugin.json
+    skills/codex-task-management/     # SKILL.md、references、agents/openai.yaml
 scripts/export-marketplace.py         # 导出可用于本机安装的干净源码
 tests/plugin-layout.test.mjs           # 打包、旧入口与离线导入检查
 docs/superpowers/                      # 历史设计与计划，不进入插件包
@@ -98,6 +106,8 @@ src/*.mjs -> ../plugins/sub2api-auth/…  # 已有调度调用的兼容入口
 新增插件时，创建 `plugins/<plugin-name>/.codex-plugin/plugin.json` 与 `skills/<skill-name>/SKILL.md`，再在市场文件追加一项。`name` 与插件目录名一致；市场 `policy.installation` 使用 `AVAILABLE`，因此用户可以选择安装。
 
 复用技能内已有脚本，把所需代码、依赖锁文件、引用文档与测试放在同一插件内。运行数据与凭据不属于发布内容。现有技能业务规则以各自 `SKILL.md` 为准。
+
+`codex-task-management` 的源码及提交、推送约定见 [AGENTS.md](https://github.com/kinsolee/agent-skills/blob/main/AGENTS.md)。本机原有的 `~/.codex/skills/codex-task-management` 入口使用目录链接指向仓库中的同名技能，已有项目引用继续读取这份源码；修改时先解析真实路径，不编辑安装缓存。其他安装者直接通过插件使用，无需创建该链接。
 
 在微信技能目录安装依赖后，从仓库根执行：
 

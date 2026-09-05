@@ -1,0 +1,21 @@
+{
+  "name": "codex-task-management",
+  "version": "0.1.0",
+  "description": "管理 Codex 主控与模块任务的派工、评审、验收和收尾",
+  "author": {
+    "name": "kinsolee",
+    "url": "https://github.com/kinsolee"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex 任务管理",
+    "shortDescription": "管理 Codex 主控与模块任务的派工、评审、验收和收尾",
+    "longDescription": "复用 Codex 原生任务能力，维护任务卡与权威索引，按项目授权协调评审、人工验收、集成和清理。",
+    "developerName": "kinsolee",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "使用 codex-task-management 核对当前主控、任务范围和检查点，按项目授权推进派工、验收或收尾。"
+    ]
+  }
+}

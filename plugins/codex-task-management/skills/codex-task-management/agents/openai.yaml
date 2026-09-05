@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex 任务管理"
+  short_description: "管理 Codex 主控与模块任务的派工、评审、人工验收和完成收尾"
+  default_prompt: "使用 $codex-task-management 核对当前主控、任务范围和检查点，按项目授权推进派工、验收或收尾。"
