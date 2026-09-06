@@ -1,6 +1,6 @@
 {
   "name": "codex-task-management",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "管理 Codex 主控与模块任务的派工、评审、验收和收尾",
   "author": {
     "name": "kinsolee",
