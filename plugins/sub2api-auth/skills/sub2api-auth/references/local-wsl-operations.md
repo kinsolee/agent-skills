@@ -84,7 +84,7 @@ BAN_SUMMARY_END
 
 ## GitHub/source control caveat
 
-This installed skill directory is not itself a Git repository. A previous project-memory file referenced an original path `/Users/kinso/code/projects/sub2api-auto-auth/skills/sub2api-auth`, but that checkout was not found in WSL. Before promising to push changes, verify:
+This installed skill directory is not itself a Git repository. A previous project-memory file referenced an original path `/Users/kinso/code/projects/sub2api-auto-auth/skills/sub2api-auth`, but that checkout was not found in WSL. (The Mac-side checkout has since moved to `/Users/kinso/code/github/kinsolee/agent-skills`, matching the `kinsolee/agent-skills` repo name.) Before promising to push changes, verify:
 
 ```bash
 git rev-parse --show-toplevel
