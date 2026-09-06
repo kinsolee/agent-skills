@@ -23,8 +23,13 @@ const EMAIL = txt(f.email);
 if (!EMAIL) { console.error("no email"); process.exit(3); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function lookup() {
-  const res = await fetch(API_ORIGIN + "/api/mfa/lookup?email=" + encodeURIComponent(EMAIL), {
-    headers: { Accept: "application/json" },
+  // 2026-08-24: platform made /api/mfa/lookup POST-only (GET now returns 405
+  // METHOD_NOT_ALLOWED with allow=POST,OPTIONS, proven on OpenCodex reauth batch);
+  // same JSON response shape via POST {email}.
+  const res = await fetch(API_ORIGIN + "/api/mfa/lookup", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ email: EMAIL }),
     signal: AbortSignal.timeout(15000),
   });
   if (res.status !== 200) return { status: "http_" + res.status };
@@ -36,7 +41,12 @@ async function lookup() {
   return { status: "ok", code: first.code, remaining: Number(first.remaining), period: Number(first.period), records: body.results.length };
 }
 let got = await lookup();
-if (got.status === "ok" && Number.isFinite(got.remaining) && got.remaining >= 0 && got.remaining < 5) {
+// 2026-08-31: freshness gate raised 5→15s with one re-check. Proven twice in one
+// OpenCodex reauth: with remaining=6–7s the code expired in-flight during the
+// tab-switch/fill/submit roundtrip and OpenAI silently rejected it (page stayed
+// on /mfa-challenge, driver exit 0). Wait out the window when <15s remain.
+for (let i = 0; i < 2; i++) {
+  if (!(got.status === "ok" && Number.isFinite(got.remaining) && got.remaining >= 0 && got.remaining < 15)) break;
   console.log("code_refresh_wait remaining=" + got.remaining + "s");
   await sleep((got.remaining + 2) * 1000);
   got = await lookup();

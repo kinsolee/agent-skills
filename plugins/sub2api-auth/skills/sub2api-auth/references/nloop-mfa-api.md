@@ -3,8 +3,8 @@
 evidence:
 - `evidence_status`: `live_verified`
 - `source_system`: `https://2fa.nloop.cc` (public ChatGPT MFA email-code query service; docs at `/api/docs`, OpenAPI 3.1 at `/api/openapi`)
-- `captured_at`: `2026-08-12T11:05:24Z`
-- `endpoint_method`: `GET /api/mfa/lookup?email=<email>`
+- `captured_at`: `2026-08-12T11:05:24Z` (contract change observed 2026-08-24, see provenance)
+- `endpoint_method`: `POST /api/mfa/lookup` with JSON body `{"email": "..."}` (2026-08-24: platform made the route POST-only — GET now returns 405 `{"ok":false,"error":"METHOD_NOT_ALLOWED"}` with `allow: POST,OPTIONS`; proven live on an OpenCodex reauth batch where `flow-mfa.mjs` failed twice with `http_405` before the POST switch; same 200 response shape)
 - `provenance`: keyless public JSON API; live queries for all four OpenCodex reauth targets returned `found:true` with fresh 6-digit TOTPs (`service=ChatGPT`, `period=30`); `scripts/flow-mfa.mjs` switched to this API the same day after the platform's browser-UI query returned 0 rows for the same accounts
 - `redaction_notes`: account emails, TOTP code values, and record `note` values are omitted; codes rotate every 30 s
 - `source_sha256`: `35094a490b7f7296189cae5f9ef18866afb890315c84ad2bdf69424be7c9514f` (raw successful single-lookup response)
@@ -13,7 +13,7 @@ evidence:
 
 | Route | Purpose |
 |---|---|
-| `GET/POST /api/mfa/lookup` | Single email. 200 `{ok:true, email, found, results:[MfaCode]}`; `found:false` = no platform record. 400 `INVALID_EMAIL`/`INVALID_PAYLOAD` |
+| `POST /api/mfa/lookup` | Single email (JSON body `{"email"}`; POST-only since 2026-08-24, GET returns 405). 200 `{ok:true, email, found, results:[MfaCode]}`; `found:false` = no platform record. 400 `INVALID_EMAIL`/`INVALID_PAYLOAD` |
 | `POST /api/mfa/batch-lookup` | Up to 100 emails per call; one shared generation timestamp; invalid emails listed in `invalidEmails` without failing the batch |
 | `GET /api/mfa/codes` | Batch code values (up to 1000 emails via repeated `email` params or `emails` list); `values` maps email → current code; recommended for business systems |
 
