@@ -17,7 +17,7 @@ description: 基于 Codex Taskboard（taskctl）以 issue 为数据源管理多�
 ## 无主控工作流
 
 1. 规划：在 Taskboard 建 parent/children issue，写清依赖与原因；不设主控对话。
-2. 派工：按 [任务书与回执](references/task-protocol.md) 把任务书写进 issue description，含 `## required_checks`。
+2. 派工：按 [任务书与回执](references/task-protocol.md) 把任务书写进 issue description，含 `## required_checks`。看板只被动展示状态，没有后台进程监看：卡片变成 todo 不会自己开始处理，处理的唯一起点是某个对话执行 claim。用户明确要求批量派工时，当前 agent 可代为创建开发对话：逐张检查资格（todo、无 threadBinding、blocked_by 依赖全部 done、项目 WIP 未满），合格卡各创建一个开发对话，首条消息含 claim 指令、任务书要点与项目上下文；不合格跳过，最后回报派工结果清单。
 3. 接单：在目标对话执行 `scripts/claim.sh <ISSUE_ID>`。脚本通过校验后 issue 转 in_progress 并绑定当前对话；失败即停，不手工绕过。
 4. 开发：按绑定 workspacePath 建独立 worktree 和分支，bootstrap 项目规则后实现；每个 worktree 一个 writer。
 5. 交付：实现与自查完成后，由接单线程自己执行 `taskctl issue move <ID> --status in_review --thread-id <本线程ID>`，comment 交付回执；writer 停止修改候选。不要跨对话代跑：跨线程 move 会清掉接单绑定，land.sh 将无法定位主工作区。
