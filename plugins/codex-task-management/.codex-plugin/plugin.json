@@ -1,6 +1,6 @@
 {
   "name": "codex-task-management",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "基于 Codex Taskboard 以 issue 为数据源管理并行任务的派工、验收与合并",
   "author": {
     "name": "kinsolee",

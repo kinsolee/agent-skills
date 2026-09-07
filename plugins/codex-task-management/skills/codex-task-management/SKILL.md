@@ -18,8 +18,8 @@ description: 基于 Codex Taskboard（taskctl）以 issue 为数据源管理多�
 
 1. 规划：在 Taskboard 建 parent/children issue，写清依赖与原因；不设主控对话。
 2. 派工：按 [任务书与回执](references/task-protocol.md) 把任务书写进 issue description，含 `## required_checks`。看板只被动展示状态，没有后台进程监看：卡片变成 todo 不会自己开始处理，处理的唯一起点是某个对话执行 claim。用户明确要求批量派工时，当前 agent 可代为创建开发对话：逐张检查资格（todo、无 threadBinding、blocked_by 依赖全部 done、项目 WIP 未满），合格卡各创建一个开发对话，首条消息含 claim 指令、任务书要点与项目上下文；不合格跳过，最后回报派工结果清单。
-3. 接单：在目标对话执行 `scripts/claim.sh <ISSUE_ID>`。脚本通过校验后 issue 转 in_progress 并绑定当前对话；失败即停，不手工绕过。
-4. 开发：按绑定 workspacePath 建独立 worktree 和分支，bootstrap 项目规则后实现；每个 worktree 一个 writer。
+3. 接单：在目标对话执行 `scripts/claim.sh <ISSUE_ID>`。脚本通过校验后 issue 转 in_progress、绑定当前对话，并自动创建独立 worktree（`<主工作区>-<issue小写>`，分支 `codex/<issue小写>-<标题slug>`）把路径与分支写回 issue；失败即停，不手工绕过。
+4. 开发：接单对话只在 claim.sh 创建的 worktree 内改代码（`git -C <worktree路径>` 或 cd），bootstrap 项目规则后实现；每个 worktree 一个 writer，主工作区保持主分支不动。
 5. 交付：实现与自查完成后，由接单线程自己执行 `taskctl issue move <ID> --status in_review --thread-id <本线程ID>`，comment 交付回执；writer 停止修改候选。不要跨对话代跑：跨线程 move 会清掉接单绑定，land.sh 将无法定位主工作区。
 6. 退回与取消：验收不通过退回 in_progress，在原对话继续修复；需求取消转 canceled 并注明原因。
 7. 验收：在 issue 对话完成独立评审与用户验收；合并必须取得用户明确批准。
@@ -28,7 +28,7 @@ description: 基于 Codex Taskboard（taskctl）以 issue 为数据源管理多�
 
 ## 门禁的三层
 
-- 脚本闸机：claim.sh / land.sh 把状态机校验（todo 才能接单、依赖全 done、WIP 上限、in_review 才能合并）固化进程序入口，不靠各对话自觉遵守约定。
+- 脚本闸机：claim.sh / land.sh 把状态机校验（todo 才能接单、依赖全 done、WIP 上限、worktree 自动创建与写回、分支一致性、in_review 才能合并）固化进程序入口，不靠各对话自觉遵守约定。
 - 原生约束：`--if-version` 乐观锁防并发覆盖单条更新；SQLite 单文件状态源天然排除双写。两者都防不了旧会话断线恢复后拿旧快照交作业，所以接单必须重新走 claim.sh 换新绑定，旧回执随绑定失效。
 - 人工约定：脚本拦不住故意绕行（直接 `issue move`）。这是当前接受的边界；需要强制时再考虑 git 服务端钩子，现在不建。
 

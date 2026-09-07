@@ -2,7 +2,7 @@
 # 合并门禁：in_review 才能合并；rebase 后逐条执行 required_checks，全部通过才
 # merge --no-ff 回主分支，写 landed 回执并转 done。全程持有主工作区合并锁。
 # 用法：land.sh <ISSUE_ID> <批准说明>
-# 环境变量：TASK_WORKTREE（issue 未记录 worktreePath 时必填）
+# 环境变量：TASK_WORKTREE（issue 未记录 worktree 路径时必填）
 set -euo pipefail
 
 ISSUE_ID="${1:?用法：land.sh <ISSUE_ID> <批准说明>}"
@@ -24,13 +24,17 @@ STATUS="$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.status')"
 VERSION="$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.version')"
 if [ "${STATUS}" != "in_review" ]; then die "状态为 ${STATUS}，只有 in_review 可合并。"; fi
 
-WORKTREE="${TASK_WORKTREE:-$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.developmentContext.worktreePath // empty')}"
-if [ -z "${WORKTREE}" ]; then die "未记录 worktreePath；用 TASK_WORKTREE=<绝对路径> 重跑。"; fi
+WORKTREE="${TASK_WORKTREE:-$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.developmentContext.path // empty')}"
+if [ -z "${WORKTREE}" ]; then die "未记录 worktree 路径（developmentContext.path）；用 TASK_WORKTREE=<绝对路径> 重跑。"; fi
 if ! git -C "${WORKTREE}" rev-parse --git-dir >/dev/null 2>&1; then die "${WORKTREE} 不是 git 工作树。"; fi
 if [ -n "$(git -C "${WORKTREE}" status --porcelain)" ]; then die "worktree 有未提交改动，先提交或清理。"; fi
 
 BRANCH="$(git -C "${WORKTREE}" symbolic-ref --short HEAD)"
 if [ "${BRANCH}" = "main" ] || [ "${BRANCH}" = "master" ]; then die "worktree 应在独立分支上，当前是 ${BRANCH}。"; fi
+RECORDED_BRANCH="$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.developmentContext.branch // empty')"
+if [ -n "${RECORDED_BRANCH}" ] && [ "${RECORDED_BRANCH}" != "${BRANCH}" ]; then
+  die "worktree 实际分支为 ${BRANCH}，与 issue 记录的 ${RECORDED_BRANCH} 不一致，需人工处理。"
+fi
 
 if git -C "${WORKTREE}" show-ref --verify --quiet refs/heads/main; then BASE=main; else BASE=master; fi
 
