@@ -20,9 +20,9 @@ description: 基于 Codex Taskboard（taskctl）以 issue 为数据源管理多�
 2. 派工：按 [任务书与回执](references/task-protocol.md) 把任务书写进 issue description，含 `## required_checks`。看板只被动展示状态，没有后台进程监看：卡片变成 todo 不会自己开始处理，处理的唯一起点是某个对话执行 claim。用户明确要求批量派工时，当前 agent 可代为创建开发对话：逐张检查资格（todo、无 threadBinding、blocked_by 依赖全部 done、项目 WIP 未满），合格卡各创建一个开发对话，首条消息含 claim 指令、任务书要点与项目上下文；不合格跳过，最后回报派工结果清单。
 3. 接单：在目标对话执行 `scripts/claim.sh <ISSUE_ID>`。脚本通过校验后 issue 转 in_progress、绑定当前对话，并自动创建独立 worktree（`<主工作区>-<issue小写>`，分支 `codex/<issue小写>-<标题slug>`）把路径与分支写回 issue；失败即停，不手工绕过。
 4. 开发：接单对话只在 claim.sh 创建的 worktree 内改代码（`git -C <worktree路径>` 或 cd），bootstrap 项目规则后实现；每个 worktree 一个 writer，主工作区保持主分支不动。
-5. 交付：实现与自查完成后，由接单线程自己执行 `taskctl issue move <ID> --status in_review --thread-id <本线程ID>`，comment 交付回执；writer 停止修改候选。不要跨对话代跑：跨线程 move 会清掉接单绑定，land.sh 将无法定位主工作区。
-6. 退回与取消：验收不通过退回 in_progress，在原对话继续修复；需求取消转 canceled 并注明原因。
-7. 验收：在 issue 对话完成独立评审与用户验收；合并必须取得用户明确批准。
+5. 交付：完成约定产物、自查、独立评审及授权范围内的修正复核后，由接单线程自己执行 `taskctl issue move <ID> --status in_review --thread-id <本线程ID>`，comment 交付回执；writer 停止修改候选。不要跨对话代跑：跨线程 move 会清掉接单绑定，land.sh 将无法定位主工作区。
+6. 退回与取消：候选需要修改时先退回 in_progress，由原对话在批准范围内修复、复验并复核最终版本；涉及新增范围或权限才请求对应确认。需求取消转 canceled 并注明原因。
+7. 验收：在 issue 对话交付具体结果供用户验收；合并必须取得用户明确批准。候选冻结或待合并仅暂停相关动作，独立且已授权的调查继续。
 8. 合并：用户批准后执行 `scripts/land.sh <ISSUE_ID> "<批准说明>"`。脚本自动 rebase、逐条执行 required_checks、`merge --no-ff` 回主分支、写 landed 回执并转 done。
 9. 清理：删除 worktree 与分支、归档对话，按"复盘与清理"沉淀。
 
@@ -42,9 +42,9 @@ description: 基于 Codex Taskboard（taskctl）以 issue 为数据源管理多�
 
 ## 保留规则
 
-- 独立评审：交付前由独立只读评审先查正确性，再查过度设计；结论必须覆盖最终版本。
+- 独立评审：交付前由独立只读评审按交付对象先检查正确性，再查复杂度，结论覆盖最终版本。调查报告可以交付已查明的事实与缺口；依赖未验证关键合同的实施方案不能因此通过。
 - 修正轮次仅作诊断记录，不是配额；同一阻断连续两轮未解先复核根因，再凭可验证的新依据继续。
-- 推进节奏：已接单任务持续推进；每轮要么完成下一个已授权动作，要么给出具体阻塞与检查点，不以"等待继续"空转。
+- 推进节奏：按适用 AGENTS.md 的目标与结束条件持续推进；卡片或阶段交付后，核对整体目标尚有哪些已授权动作并承接。纯调查按约定范围交付，不将后续恢复视为自动获批。
 - 失败恢复：先判断代码、环境、依赖还是外部状态问题；无法确定安全下一步时走自愈诊断，不机械重试。
 - 长任务等待：绑定实际进程或会话句柄，按 ≤60 秒间隔读进度；两次空探测且无文件活动才判线程损坏。
 
