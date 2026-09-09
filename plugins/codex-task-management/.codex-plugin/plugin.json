@@ -1,6 +1,6 @@
 {
   "name": "codex-task-management",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "基于 Codex Taskboard 以 issue 为数据源管理并行任务的派工、验收与合并",
   "author": {
     "name": "kinsolee",
@@ -10,12 +10,12 @@
   "interface": {
     "displayName": "Codex 任务管理",
     "shortDescription": "基于 Codex Taskboard 以 issue 为数据源管理并行任务的派工、验收与合并",
-    "longDescription": "以 Taskboard issue 为唯一任务数据源，无主控工作流配合 claim/land 门禁脚本，管理 worktree 并行开发、验收与集成收尾。",
+    "longDescription": "以 Taskboard issue 为唯一任务数据源，按用户指定区分主控与独立执行对话，配合 claim/land 管理 worktree 派工、启动核验、验收与串行集成。",
     "developerName": "kinsolee",
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": [
-      "使用 codex-task-management 查看当前任务板，按门禁流程接单、开发、交付或验收合并。"
+      "使用 codex-task-management 核对当前任务板与对话职责，再按流程派工、自行接单、核验启动、交付或验收合并。"
     ]
   }
 }

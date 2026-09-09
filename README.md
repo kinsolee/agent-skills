@@ -10,7 +10,7 @@ Kinsolee 维护的 Agent Skills 仓库，面向支持相应规范的 AI harness�
 | --- | --- | --- |
 | [sub2api-auth](plugins/sub2api-auth/README.md) | Sub2API / OpenCodex 的 OpenAI OAuth 授权、重新授权及账号池巡检 | Node.js、ego-browser、已登录的 lark-cli、管理端配置 |
 | [wechat-draft-publisher](plugins/wechat-draft-publisher/README.md) | Markdown 本地预检、微信公众号草稿创建与回读验证 | Node.js 20+；写入草稿时需要公众号凭据与 IP 白名单 |
-| [codex-task-management](plugins/codex-task-management/skills/codex-task-management/SKILL.md) | Codex 主控与模块任务的派工、评审、人工验收、集成和收尾 | Codex 原生任务工具；无需安装脚本依赖 |
+| [codex-task-management](plugins/codex-task-management/skills/codex-task-management/SKILL.md) | 主控与独立执行任务的派工、启动核验、评审和集成 | Codex 任务工具、taskctl、Git、Bash、jq |
 
 安装只加载技能和脚本，不自动执行账号操作、创建定时任务或上传文章。实际使用前阅读对应 `SKILL.md`，遵守其中的目标确认、授权及读回要求。
 
@@ -20,7 +20,7 @@ Kinsolee 维护的 Agent Skills 仓库，面向支持相应规范的 AI harness�
 
 `wechat-draft-publisher` 的运行文件位于技能目录内。`sub2api-auth` 还依赖插件根的 `src/` 调度脚本，因此使用它时保留完整的 `plugins/sub2api-auth/` 包，并按说明设置工作目录。Node.js、ego-browser、lark-cli、凭据及调度能力仍需在目标环境配置；其他 harness 的完整业务流程尚未逐一验证。
 
-`codex-task-management` 的任务操作依赖 Codex 原生工具；其他 harness 仅能读取其规则，完整协作流程需有对应能力并另行验证。
+`codex-task-management` 使用 Taskboard/taskctl 保存任务，使用 Codex 任务工具创建和读取独立执行对话，使用 claim/land 脚本管理工作树与接单、合并门禁。其他 harness 仅能读取规则，完整协作流程需有对应能力并另行验证。
 
 ## 安装到 Codex
 
@@ -63,7 +63,7 @@ codex plugin list --marketplace kinsolee
 
 ### 依赖、更新与卸载
 
-含脚本的插件安装不等于安装 Node.js 依赖。在 Codex 提供的技能绝对路径下，按插件 README 执行 `npm ci --ignore-scripts`。`codex-task-management` 只包含规则、任务书/回执模板和界面元数据，无需此步骤。凭据使用环境变量或私有配置，不放入版本控制，也不要依赖插件缓存永久保存凭据和运行状态。
+含脚本的插件安装不等于安装 Node.js 依赖。在 Codex 提供的技能绝对路径下，按插件 README 执行 `npm ci --ignore-scripts`。`codex-task-management` 无 Node.js 依赖，无需此步骤；其 Bash 门禁脚本需要现有 taskctl、Git 和 jq。凭据使用环境变量或私有配置，不放入版本控制，也不要依赖插件缓存永久保存凭据和运行状态。
 
 远端更新时先运行 `codex plugin marketplace upgrade kinsolee`，再重新执行所需插件的 `codex plugin add`。维护者需为内容更新修改相应插件的版本；本地调试可使用 `plugin-creator` 的 cachebuster 更新流程，然后重新导出到一个新目录并切换本地来源。
 
@@ -89,7 +89,7 @@ plugins/
     skills/wechat-draft-publisher/     # SKILL.md、scripts、references、tests
   codex-task-management/
     .codex-plugin/plugin.json
-    skills/codex-task-management/     # SKILL.md、references、agents/openai.yaml
+    skills/codex-task-management/     # SKILL.md、references、scripts、agents/openai.yaml
 scripts/export-marketplace.py         # 导出可用于本机安装的干净源码
 tests/plugin-layout.test.mjs           # 打包、旧入口与离线导入检查
 docs/superpowers/                      # 历史设计与计划，不进入插件包
