@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "codex-task-management",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "description": "管理 Codex 主控与模块任务的派工、评审、验收和收尾",
       "source": "./plugins/codex-task-management",
       "category": "productivity"
