@@ -10,7 +10,7 @@ Kinsolee 维护的 Agent Skills 仓库，面向支持相应规范的 AI harness�
 | --- | --- | --- |
 | [sub2api-auth](plugins/sub2api-auth/README.md) | Sub2API / OpenCodex 的 OpenAI OAuth 授权、重新授权及账号池巡检 | Node.js、ego-browser、已登录的 lark-cli、管理端配置 |
 | [wechat-draft-publisher](plugins/wechat-draft-publisher/README.md) | Markdown 本地预检、微信公众号草稿创建与回读验证 | Node.js 20+；写入草稿时需要公众号凭据与 IP 白名单 |
-| [codex-task-management](plugins/codex-task-management/skills/codex-task-management/SKILL.md) | 主控与独立执行任务的派工、启动核验、评审和集成 | Codex 任务工具、taskctl、Git、Bash、jq |
+| [codex-task-management](plugins/codex-task-management/skills/codex-task-management/SKILL.md) | 任务直接交付，按需协调跨任务依赖、资源与串行集成 | Codex 任务工具、taskctl、Git、Bash、jq |
 
 安装只加载技能和脚本，不自动执行账号操作、创建定时任务或上传文章。实际使用前阅读对应 `SKILL.md`，遵守其中的目标确认、授权及读回要求。
 

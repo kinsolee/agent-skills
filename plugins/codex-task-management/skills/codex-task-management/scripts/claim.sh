@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 接单门禁：todo 才能接、依赖全 done、WIP 2+2、绑定当前对话后转 in_progress。
+# 接单门禁：todo 才能接、依赖全 done、绑定当前对话后转 in_progress。
 # 校验通过后自动创建独立 worktree 与分支（codex/<issue>-<标题slug>），并把
 # developmentContext（worktree path/branch）写回 issue，杜绝"接单后直接在主工作区
 # 改代码"的并行冲突。首次接单的状态变更与 worktree 创建全程持项目串行锁；
@@ -98,7 +98,7 @@ done
 
 PROJECT_ID="$(printf '%s' "${TASK_JSON}" | "${JQ}" -r '.projectId')"
 
-# 项目级串行锁：包住 WIP 统计、worktree 创建与状态/记录写入，消除并发抢单窗口
+# 项目级串行锁：包住 worktree 创建与状态/记录写入，消除并发抢单窗口
 LOCK="/tmp/taskboard-claim-${PROJECT_ID}.lock"
 ACQUIRED=""
 for _ in $(seq 1 120); do
@@ -107,12 +107,6 @@ for _ in $(seq 1 120); do
 done
 if [ -z "${ACQUIRED}" ]; then die "项目接单锁等待超时（${LOCK}），请重试。"; fi
 trap 'rmdir "${LOCK}" 2>/dev/null || true' EXIT
-
-wip_count() { "${TASKCTL}" issue list --project "${1}" --status "${2}" --json | "${JQ}" '.tasks | length'; }
-N_PRG="$(wip_count "${PROJECT_ID}" in_progress)"
-if [ "${N_PRG}" -ge 2 ]; then die "项目 ${PROJECT_ID} 已有 ${N_PRG} 个 in_progress（上限 2）。"; fi
-N_REV="$(wip_count "${PROJECT_ID}" in_review)"
-if [ "${N_REV}" -ge 2 ]; then die "项目 ${PROJECT_ID} 已有 ${N_REV} 个 in_review（上限 2）。"; fi
 
 WORKSPACE="$("${TASKCTL}" project list --json | "${JQ}" -r --arg p "${PROJECT_ID}" '.projects[] | select(.id == $p) | .workspacePath // empty')"
 if [ -z "${WORKSPACE}" ]; then die "project ${PROJECT_ID} 未映射 workspacePath，先执行 project map。"; fi
