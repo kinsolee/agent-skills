@@ -1,19 +1,12 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "kinsolee",
-  "description": "kinsolee 的插件集合：Codex 任务管理、sub2api 认证维护、微信草稿发布",
+  "description": "kinsolee 的插件集合：sub2api 认证维护、微信草稿发布",
   "owner": {
     "name": "kinsolee",
     "url": "https://github.com/kinsolee"
   },
   "plugins": [
-    {
-      "name": "codex-task-management",
-      "version": "0.3.3",
-      "description": "管理 Codex 主控与模块任务的派工、评审、验收和收尾",
-      "source": "./plugins/codex-task-management",
-      "category": "productivity"
-    },
     {
       "name": "sub2api-auth",
       "description": "维护 sub2api 账号认证、监控与恢复操作",

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex 任务管理"
-  short_description: "基于 Codex Taskboard 以 issue 为数据源管理并行任务的派工、验收与合并"
-  default_prompt: "使用 $codex-task-management 核对当前任务板与对话职责，再按流程派工、自行接单、核验启动、交付或验收合并。"

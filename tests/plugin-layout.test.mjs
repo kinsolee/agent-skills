@@ -15,7 +15,7 @@ test("marketplace export is self-contained and excludes local runtime files", (t
   const result = spawnSync("python3", [path.join(root, "scripts/export-marketplace.py"), destination], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   const marketplace = JSON.parse(readFileSync(path.join(destination, ".agents/plugins/marketplace.json")));
-  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["sub2api-auth", "wechat-draft-publisher", "codex-task-management"]);
+  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["sub2api-auth", "wechat-draft-publisher"]);
   for (const plugin of marketplace.plugins) {
     const pluginRoot = path.resolve(destination, plugin.source.path);
     const manifest = JSON.parse(readFileSync(path.join(pluginRoot, ".codex-plugin/plugin.json")));

@@ -1,7 +1,7 @@
 {
   "name": "kinsolee",
   "interface": {
-    "displayName": "Kinsolee \u7684 Codex \u63d2\u4ef6"
+    "displayName": "Kinsolee 的 Codex 插件"
   },
   "plugins": [
     {
@@ -21,18 +21,6 @@
       "source": {
         "source": "local",
         "path": "./plugins/wechat-draft-publisher"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
-      "name": "codex-task-management",
-      "source": {
-        "source": "local",
-        "path": "./plugins/codex-task-management"
       },
       "policy": {
         "installation": "AVAILABLE",
